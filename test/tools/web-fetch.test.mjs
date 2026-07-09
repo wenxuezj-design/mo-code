@@ -1,0 +1,92 @@
+import { createServer } from "node:http";
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { executeTool, toolDefinitions } from "../../src/tools/index.ts";
+import { webFetch } from "../../src/tools/web-fetch.ts";
+
+test("web_fetch 返回文本响应", async () => {
+  await withServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("hello web");
+  }, async (url) => {
+    const result = await webFetch({ url });
+
+    assert.equal(result, "hello web");
+  });
+});
+
+test("web_fetch 清理 HTML 响应", async () => {
+  await withServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(`
+      <html>
+        <style>.hidden { color: red; }</style>
+        <script>alert("x")</script>
+        <body><h1>Hello&nbsp;Agent</h1><p>Tom &amp; Jerry &lt;ok&gt; &quot;yes&quot;</p></body>
+      </html>
+    `);
+  }, async (url) => {
+    const result = await webFetch({ url });
+
+    assert.equal(result, 'Hello Agent Tom & Jerry <ok> "yes"');
+  });
+});
+
+test("web_fetch 拒绝非 http 协议", async () => {
+  const result = await webFetch({ url: "file:///tmp/secret.txt" });
+
+  assert.equal(result, "Error: only http(s) URLs are supported");
+});
+
+test("web_fetch 返回 HTTP 错误", async () => {
+  await withServer((_req, res) => {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("missing");
+  }, async (url) => {
+    const result = await webFetch({ url });
+
+    assert.equal(result, "HTTP error: 404 Not Found");
+  });
+});
+
+test("web_fetch 根据 max_length 截断响应", async () => {
+  await withServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("abcdef");
+  }, async (url) => {
+    const result = await webFetch({ url, max_length: 3 });
+
+    assert.equal(result, "abc\n\n[... truncated at 3 characters]");
+  });
+});
+
+test("web_fetch 注册到工具列表并支持 executeTool 分发", async () => {
+  await withServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("registered");
+  }, async (url) => {
+    assert.ok(toolDefinitions.some((tool) => tool.name === "web_fetch"));
+
+    const result = await executeTool("web_fetch", { url });
+
+    assert.equal(result, "registered");
+  });
+});
+
+async function withServer(handler, run) {
+  const server = createServer(handler);
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    assert.ok(address);
+
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+}
