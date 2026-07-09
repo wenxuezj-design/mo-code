@@ -5,38 +5,61 @@ import { readFile } from "./read-file.ts";
 import { runShell } from "./run-shell.ts";
 import { writeFile } from "./write-file.ts";
 
+const MAX_RESULT_CHARS = 50000;
+
 export async function executeTool(name: string, input: Record<string, unknown>): Promise<string> {
+  let result: string;
+
   switch (name) {
     case "read_file":
-      return readFile({ file_path: String(input.file_path ?? "") });
+      result = readFile({ file_path: String(input.file_path ?? "") });
+      break;
     case "write_file":
-      return writeFile({
+      result = writeFile({
         file_path: String(input.file_path ?? ""),
         content: String(input.content ?? ""),
       });
+      break;
     case "edit_file":
-      return editFile({
+      result = editFile({
         file_path: String(input.file_path ?? ""),
         old_string: String(input.old_string ?? ""),
         new_string: String(input.new_string ?? ""),
       });
+      break;
     case "list_files":
-      return listFiles({
+      result = await listFiles({
         pattern: String(input.pattern ?? ""),
         path: input.path === undefined ? undefined : String(input.path),
       });
+      break;
     case "grep_search":
-      return grepSearch({
+      result = grepSearch({
         pattern: String(input.pattern ?? ""),
         path: input.path === undefined ? undefined : String(input.path),
         include: input.include === undefined ? undefined : String(input.include),
       });
+      break;
     case "run_shell":
-      return runShell({
+      result = runShell({
         command: String(input.command ?? ""),
         timeout: input.timeout === undefined ? undefined : Number(input.timeout),
       });
+      break;
     default:
-      return `Unknown tool: ${name}`;
+      result = `Unknown tool: ${name}`;
   }
+
+  return truncateResult(result);
+}
+
+function truncateResult(result: string): string {
+  if (result.length <= MAX_RESULT_CHARS) return result;
+
+  const keepEach = Math.floor((MAX_RESULT_CHARS - 60) / 2);
+  return (
+    result.slice(0, keepEach) +
+    `\n\n[... truncated ${result.length - keepEach * 2} chars ...]\n\n` +
+    result.slice(-keepEach)
+  );
 }
