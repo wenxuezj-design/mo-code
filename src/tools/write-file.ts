@@ -1,9 +1,9 @@
 import { dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
-import type { ToolDef } from "./types.ts";
+import type { Tool } from "./types.ts";
 
-export const writeFileTool: ToolDef = {
+export const writeFileTool: Tool = {
   name: "write_file",
   description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
   input_schema: {
@@ -13,6 +13,12 @@ export const writeFileTool: ToolDef = {
       content: { type: "string", description: "The content to write to the file" },
     },
     required: ["file_path", "content"],
+  },
+  execute(input) {
+    return writeFile({
+      file_path: String(input.file_path ?? ""),
+      content: String(input.content ?? ""),
+    });
   },
 };
 

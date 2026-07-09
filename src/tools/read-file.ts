@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 
-import type { ToolDef } from "./types.ts";
+import type { Tool } from "./types.ts";
 
-export const readFileTool: ToolDef = {
+export const readFileTool: Tool = {
   name: "read_file",
   description: "Read the contents of a file. Returns the file content with line numbers.",
   input_schema: {
@@ -11,6 +11,9 @@ export const readFileTool: ToolDef = {
       file_path: { type: "string", description: "The path to the file to read" },
     },
     required: ["file_path"],
+  },
+  execute(input) {
+    return readFile({ file_path: String(input.file_path ?? "") });
   },
 };
 

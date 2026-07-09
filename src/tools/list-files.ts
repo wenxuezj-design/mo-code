@@ -1,8 +1,8 @@
 import { glob } from "glob";
 
-import type { ToolDef } from "./types.ts";
+import type { Tool } from "./types.ts";
 
-export const listFilesTool: ToolDef = {
+export const listFilesTool: Tool = {
   name: "list_files",
   description: "List files matching a glob pattern. Returns matching file paths.",
   input_schema: {
@@ -18,6 +18,12 @@ export const listFilesTool: ToolDef = {
       },
     },
     required: ["pattern"],
+  },
+  execute(input) {
+    return listFiles({
+      pattern: String(input.pattern ?? ""),
+      path: input.path === undefined ? undefined : String(input.path),
+    });
   },
 };
 

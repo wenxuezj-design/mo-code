@@ -1,8 +1,8 @@
 import { execSync } from "node:child_process";
 
-import type { ToolDef } from "./types.ts";
+import type { Tool } from "./types.ts";
 
-export const runShellTool: ToolDef = {
+export const runShellTool: Tool = {
   name: "run_shell",
   description: "Execute a shell command and return its output. Use this for running tests, installing packages, git operations, etc.",
   input_schema: {
@@ -12,6 +12,12 @@ export const runShellTool: ToolDef = {
       timeout: { type: "number", description: "Timeout in milliseconds (default: 30000)" },
     },
     required: ["command"],
+  },
+  execute(input) {
+    return runShell({
+      command: String(input.command ?? ""),
+      timeout: input.timeout === undefined ? undefined : Number(input.timeout),
+    });
   },
 };
 

@@ -9,3 +9,7 @@ export type ToolDef = {
 };
 
 export type ToolHandler = (input: Record<string, unknown>) => Promise<string> | string;
+
+export type Tool = ToolDef & {
+  execute: ToolHandler;
+};

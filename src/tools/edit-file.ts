@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
-import type { ToolDef } from "./types.ts";
+import type { Tool } from "./types.ts";
 
-export const editFileTool: ToolDef = {
+export const editFileTool: Tool = {
   name: "edit_file",
   description: "Edit a file by replacing an exact string match with new content. The old_string must match exactly and be unique.",
   input_schema: {
@@ -13,6 +13,13 @@ export const editFileTool: ToolDef = {
       new_string: { type: "string", description: "The string to replace it with" },
     },
     required: ["file_path", "old_string", "new_string"],
+  },
+  execute(input) {
+    return editFile({
+      file_path: String(input.file_path ?? ""),
+      old_string: String(input.old_string ?? ""),
+      new_string: String(input.new_string ?? ""),
+    });
   },
 };
 

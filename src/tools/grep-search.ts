@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 
-import type { ToolDef } from "./types.ts";
+import type { Tool } from "./types.ts";
 
-export const grepSearchTool: ToolDef = {
+export const grepSearchTool: Tool = {
   name: "grep_search",
   description: "Search for a regex pattern in files. Returns matching lines with file paths and line numbers.",
   input_schema: {
@@ -19,6 +19,13 @@ export const grepSearchTool: ToolDef = {
       },
     },
     required: ["pattern"],
+  },
+  execute(input) {
+    return grepSearch({
+      pattern: String(input.pattern ?? ""),
+      path: input.path === undefined ? undefined : String(input.path),
+      include: input.include === undefined ? undefined : String(input.include),
+    });
   },
 };
 
