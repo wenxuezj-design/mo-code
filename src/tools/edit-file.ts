@@ -27,7 +27,9 @@ export function editFile(input: {
     }
 
     const content = readFileSync(input.file_path, "utf-8");
-    const count = content.split(input.old_string).length - 1;
+    const normalizedContent = normalizeQuotes(content);
+    const normalizedOldString = normalizeQuotes(input.old_string);
+    const count = normalizedContent.split(normalizedOldString).length - 1;
     if (count === 0) {
       return `Error: old_string not found in ${input.file_path}`;
     }
@@ -35,10 +37,46 @@ export function editFile(input: {
       return `Error: old_string found ${count} times in ${input.file_path}. Must be unique.`;
     }
 
-    const updated = content.split(input.old_string).join(input.new_string);
+    const actualOldString = findActualString(content, input.old_string);
+    if (!actualOldString) {
+      return `Error: old_string not found in ${input.file_path}`;
+    }
+
+    const updated = content.split(actualOldString).join(input.new_string);
     writeFileSync(input.file_path, updated);
-    return `Successfully edited ${input.file_path}`;
+
+    const quoteNote = actualOldString !== input.old_string
+      ? " (matched via quote normalization)"
+      : "";
+    return `Successfully edited ${input.file_path}${quoteNote}\n\n${generateDiff(content, actualOldString, input.new_string)}`;
   } catch (error) {
     return `Error editing file: ${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+function normalizeQuotes(value: string): string {
+  return value
+    .replace(/[\u2018\u2019\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u2033]/g, '"');
+}
+
+function findActualString(fileContent: string, searchString: string): string | null {
+  if (fileContent.includes(searchString)) return searchString;
+
+  const normalizedFile = normalizeQuotes(fileContent);
+  const normalizedSearch = normalizeQuotes(searchString);
+  const index = normalizedFile.indexOf(normalizedSearch);
+
+  if (index === -1) return null;
+  return fileContent.slice(index, index + searchString.length);
+}
+
+function generateDiff(content: string, oldString: string, newString: string): string {
+  const lineNumber = content.slice(0, content.indexOf(oldString)).split("\n").length;
+
+  return [
+    `@@ -${lineNumber},1 +${lineNumber},1 @@`,
+    `- ${oldString}`,
+    `+ ${newString}`,
+  ].join("\n");
 }
