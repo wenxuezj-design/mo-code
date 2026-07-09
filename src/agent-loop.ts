@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+
+import { executeTool, toolDefinitions } from "./tools/index.ts";
 
 // 1. Type definitions
 type Message = {
@@ -34,23 +35,6 @@ type MessageResponse = {
 // 2. Model, system prompt, and tool definitions
 const MODEL = "mock";
 const SYSTEM_PROMPT = "You are a tiny coding agent. Use tools when needed.";
-
-const toolDefinitions = [
-  {
-    name: "read_file",
-    description: "Read a local file and return its contents.",
-    input_schema: {
-      type: "object",
-      properties: {
-        file_path: {
-          type: "string",
-          description: "Path to the file to read.",
-        },
-      },
-      required: ["file_path"],
-    },
-  },
-];
 
 // 3. A tiny Anthropic-compatible client
 class AnthropicLikeClient {
@@ -121,18 +105,7 @@ export class Agent {
   }
 }
 
-// 5. Tool execution and CLI entry
-async function executeTool(name: string, input: Record<string, unknown>): Promise<string> {
-  if (name !== "read_file") return `Unknown tool: ${name}`;
-  const filePath = String(input.file_path ?? "");
-
-  try {
-    return readFileSync(filePath, "utf-8");
-  } catch (error) {
-    return `Error reading file: ${error instanceof Error ? error.message : String(error)}`;
-  }
-}
-
+// 5. CLI entry
 async function main() {
   const prompt = process.argv.slice(2).join(" ") || "Read the file greeting.txt and tell me what it says.";
   await new Agent().chat(prompt);

@@ -2,6 +2,10 @@
   "name": "mo-code",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
     "@types/node": "^26.1.0"
   }
