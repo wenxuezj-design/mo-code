@@ -2,6 +2,7 @@ import { editFile } from "./edit-file.ts";
 import { grepSearch } from "./grep-search.ts";
 import { listFiles } from "./list-files.ts";
 import { readFile } from "./read-file.ts";
+import { runShell } from "./run-shell.ts";
 import { writeFile } from "./write-file.ts";
 
 export async function executeTool(name: string, input: Record<string, unknown>): Promise<string> {
@@ -29,6 +30,11 @@ export async function executeTool(name: string, input: Record<string, unknown>):
         pattern: String(input.pattern ?? ""),
         path: input.path === undefined ? undefined : String(input.path),
         include: input.include === undefined ? undefined : String(input.include),
+      });
+    case "run_shell":
+      return runShell({
+        command: String(input.command ?? ""),
+        timeout: input.timeout === undefined ? undefined : Number(input.timeout),
       });
     default:
       return `Unknown tool: ${name}`;
