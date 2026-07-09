@@ -1,0 +1,8 @@
+{
+  "name": "mo-code",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^26.1.0"
+  }
+}
