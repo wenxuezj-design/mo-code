@@ -1,3 +1,4 @@
+import { editFile } from "./edit-file.ts";
 import { readFile } from "./read-file.ts";
 import { writeFile } from "./write-file.ts";
 
@@ -9,6 +10,12 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       return writeFile({
         file_path: String(input.file_path ?? ""),
         content: String(input.content ?? ""),
+      });
+    case "edit_file":
+      return editFile({
+        file_path: String(input.file_path ?? ""),
+        old_string: String(input.old_string ?? ""),
+        new_string: String(input.new_string ?? ""),
       });
     default:
       return `Unknown tool: ${name}`;
