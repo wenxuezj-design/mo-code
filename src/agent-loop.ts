@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 
+import { SYSTEM_PROMPT_TEMPLATE } from "./system-prompt.ts";
 import { executeTool, toolDefinitions } from "./tools/index.ts";
 
 // 1. Type definitions
@@ -32,9 +33,8 @@ type MessageResponse = {
   content: ContentBlock[];
 };
 
-// 2. Model, system prompt, and tool definitions
+// 2. Model and tool definitions
 const MODEL = "mock";
-const SYSTEM_PROMPT = "You are a tiny coding agent. Use tools when needed.";
 
 // 3. A tiny Anthropic-compatible client
 class AnthropicLikeClient {
@@ -66,9 +66,14 @@ export class Agent {
   private client: AnthropicLikeClient;
   private messages: Message[] = [];
   private readFileState = new Map<string, number>();
+  private systemPrompt: string;
 
-  constructor(baseURL = process.env.ANTHROPIC_BASE_URL ?? "http://127.0.0.1:3000") {
+  constructor(
+    baseURL = process.env.ANTHROPIC_BASE_URL ?? "http://127.0.0.1:3000",
+    systemPrompt = SYSTEM_PROMPT_TEMPLATE,
+  ) {
     this.client = new AnthropicLikeClient(baseURL);
+    this.systemPrompt = systemPrompt;
   }
 
   async chat(userText: string): Promise<void> {
@@ -78,7 +83,7 @@ export class Agent {
       const request = {
         model: MODEL,
         max_tokens: 4096,
-        system: SYSTEM_PROMPT,
+        system: this.systemPrompt,
         tools: toolDefinitions,
         messages: this.messages,
       };
