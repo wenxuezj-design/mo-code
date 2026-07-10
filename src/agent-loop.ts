@@ -65,6 +65,7 @@ class AnthropicLikeClient {
 export class Agent {
   private client: AnthropicLikeClient;
   private messages: Message[] = [];
+  private readFileState = new Map<string, number>();
 
   constructor(baseURL = process.env.ANTHROPIC_BASE_URL ?? "http://127.0.0.1:3000") {
     this.client = new AnthropicLikeClient(baseURL);
@@ -96,7 +97,9 @@ export class Agent {
       const results: ToolResultBlock[] = [];
       for (const toolUse of toolUses) {
         console.log(`  -> ${toolUse.name}(${JSON.stringify(toolUse.input)})`);
-        const output = await executeTool(toolUse.name, toolUse.input);
+        const output = await executeTool(toolUse.name, toolUse.input, {
+          readFileState: this.readFileState,
+        });
         results.push({ type: "tool_result", tool_use_id: toolUse.id, content: output });
       }
 

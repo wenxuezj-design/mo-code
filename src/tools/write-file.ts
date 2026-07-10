@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
+import { recordFileState, validateFileMutation } from "./file-state.ts";
 import type { Tool } from "./types.ts";
 
 export const writeFileTool: Tool = {
@@ -14,11 +15,20 @@ export const writeFileTool: Tool = {
     },
     required: ["file_path", "content"],
   },
-  execute(input) {
-    return writeFile({
-      file_path: String(input.file_path ?? ""),
+  validateInput(input, context) {
+    return validateFileMutation(String(input.file_path ?? ""), "writing", context);
+  },
+  execute(input, context) {
+    const filePath = String(input.file_path ?? "");
+    const result = writeFile({
+      file_path: filePath,
       content: String(input.content ?? ""),
     });
+    if (result.startsWith("Successfully")) {
+      const warning = recordFileState(filePath, context);
+      if (warning) return `${result}\n${warning}`;
+    }
+    return result;
   },
 };
 

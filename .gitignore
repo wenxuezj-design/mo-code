@@ -9,6 +9,9 @@ lerna-debug.log*
 # Local implementation references
 .references/
 
+# Local implementation plans
+docs/superpowers/
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 

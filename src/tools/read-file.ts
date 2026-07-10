@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import { recordFileState } from "./file-state.ts";
 import type { Tool } from "./types.ts";
 
 export const readFileTool: Tool = {
@@ -12,8 +13,14 @@ export const readFileTool: Tool = {
     },
     required: ["file_path"],
   },
-  execute(input) {
-    return readFile({ file_path: String(input.file_path ?? "") });
+  execute(input, context) {
+    const filePath = String(input.file_path ?? "");
+    const result = readFile({ file_path: filePath });
+    if (!result.startsWith("Error")) {
+      const warning = recordFileState(filePath, context);
+      if (warning) return `${result}\n${warning}`;
+    }
+    return result;
   },
 };
 

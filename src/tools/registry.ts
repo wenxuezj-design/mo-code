@@ -18,4 +18,8 @@ export const tools: Tool[] = [
   webFetchTool,
 ];
 
-export const toolDefinitions: ToolDef[] = tools.map(({ execute, ...definition }) => definition);
+export const toolDefinitions: ToolDef[] = tools.map(({ name, description, input_schema }) => ({
+  name,
+  description,
+  input_schema,
+}));

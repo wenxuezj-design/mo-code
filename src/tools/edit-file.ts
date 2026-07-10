@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
+import { recordFileState, validateFileMutation } from "./file-state.ts";
 import type { Tool } from "./types.ts";
 
 export const editFileTool: Tool = {
@@ -14,12 +15,21 @@ export const editFileTool: Tool = {
     },
     required: ["file_path", "old_string", "new_string"],
   },
-  execute(input) {
-    return editFile({
-      file_path: String(input.file_path ?? ""),
+  validateInput(input, context) {
+    return validateFileMutation(String(input.file_path ?? ""), "editing", context);
+  },
+  execute(input, context) {
+    const filePath = String(input.file_path ?? "");
+    const result = editFile({
+      file_path: filePath,
       old_string: String(input.old_string ?? ""),
       new_string: String(input.new_string ?? ""),
     });
+    if (result.startsWith("Successfully")) {
+      const warning = recordFileState(filePath, context);
+      if (warning) return `${result}\n${warning}`;
+    }
+    return result;
   },
 };
 

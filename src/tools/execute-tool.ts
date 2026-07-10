@@ -1,13 +1,21 @@
 import { tools } from "./registry.ts";
+import type { ToolContext } from "./types.ts";
 
 const MAX_RESULT_CHARS = 50000;
 const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
 
-export async function executeTool(name: string, input: Record<string, unknown>): Promise<string> {
+export async function executeTool(
+  name: string,
+  input: Record<string, unknown>,
+  context: ToolContext = { readFileState: new Map() },
+): Promise<string> {
   const tool = toolMap.get(name);
   if (!tool) return `Unknown tool: ${name}`;
 
-  const result = await tool.execute(input);
+  const validation = await tool.validateInput?.(input, context);
+  if (validation && !validation.ok) return validation.message;
+
+  const result = await tool.execute(input, context);
   return truncateResult(result);
 }
 
