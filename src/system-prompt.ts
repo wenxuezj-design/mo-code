@@ -78,23 +78,25 @@ export function buildStaticSystemPrompt(
 }
 
 export function buildDynamicSystemContext(): string {
-  const platform = `${os.platform()} ${os.arch()}`;
-  const shell = process.platform === "win32"
-    ? (process.env.ComSpec || "cmd.exe")
-    : (process.env.SHELL || "/bin/sh");
-
-  const environment = `# Environment
-Working directory: ${process.cwd()}
-Platform: ${platform}
-Shell: ${shell}`;
-
   return [
-    environment,
+    buildEnvironmentContext(),
     getGitContext(),
     buildMemoryPromptSection(),
     buildSkillDescriptions(),
     buildAgentDescriptions(),
   ].filter(Boolean).join("\n\n");
+}
+
+function buildEnvironmentContext(): string {
+  const platform = `${os.platform()} ${os.arch()}`;
+  const shell = process.platform === "win32"
+    ? (process.env.ComSpec || "cmd.exe")
+    : (process.env.SHELL || "/bin/sh");
+
+  return `# Environment
+Working directory: ${process.cwd()}
+Platform: ${platform}
+Shell: ${shell}`;
 }
 
 export function getGitContext(): string {
