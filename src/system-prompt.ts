@@ -1,8 +1,8 @@
-import { execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import * as os from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { getGitContext } from "./git-context.ts";
 import { buildMemoryPromptSection } from "./memory/deferred.ts";
 import { buildSkillDescriptions } from "./skills/deferred.ts";
 import { buildAgentDescriptions } from "./subagent/deferred.ts";
@@ -97,21 +97,6 @@ function buildEnvironmentContext(): string {
 Working directory: ${process.cwd()}
 Platform: ${platform}
 Shell: ${shell}`;
-}
-
-export function getGitContext(): string {
-  try {
-    const opts = { encoding: "utf-8" as const, timeout: 3000 };
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", opts).trim();
-    const log = execSync("git log --oneline -5", opts).trim();
-    const status = execSync("git status --short", opts).trim();
-    let result = `Git branch: ${branch}`;
-    if (log) result += `\nRecent commits:\n${log}`;
-    if (status) result += `\nGit status:\n${status}`;
-    return result;
-  } catch {
-    return "";
-  }
 }
 
 export function buildUserContextReminder(): string {
