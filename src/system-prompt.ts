@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import * as os from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { globSync } from "glob";
 
 import { getGitContext } from "./git-context.ts";
@@ -118,14 +118,8 @@ export function loadProjectInstructions(): string {
   let dir = process.cwd();
 
   while (true) {
-    const file = join(dir, "CLAUDE.md");
-    if (existsSync(file)) {
-      try {
-        let content = readFileSync(file, "utf-8");
-        content = resolveIncludes(content, dir);
-        claudeMdParts.unshift(content);
-      } catch {}
-    }
+    const claudeMd = loadClaudeMd(dir);
+    if (claudeMd !== null) claudeMdParts.unshift(claudeMd);
     ruleParts.unshift(...loadRulesDir(dir));
 
     const parent = resolve(dir, "..");
@@ -142,16 +136,35 @@ export function loadProjectInstructions(): string {
   return claudeMd + rules;
 }
 
+function loadClaudeMd(dir: string): string | null {
+  const file = join(dir, "CLAUDE.md");
+  try {
+    if (!existsSync(file)) return null;
+    const allowedRoot = realpathSync(dir);
+    const resolvedFile = realpathSync(file);
+    if (!isPathWithinRoot(allowedRoot, resolvedFile)) return null;
+
+    const content = readFileSync(resolvedFile, "utf-8");
+    return resolveIncludes(content, dirname(resolvedFile), allowedRoot);
+  } catch {
+    return null;
+  }
+}
+
 function loadRulesDir(dir: string): string[] {
   const rulesDir = join(dir, ".claude", "rules");
   try {
+    const allowedRoot = realpathSync(dir);
     const files = globSync("**/*.md", { cwd: rulesDir, nodir: true }).sort();
     const parts: string[] = [];
     for (const file of files) {
       try {
         const filePath = join(rulesDir, file);
-        let content = readFileSync(filePath, "utf-8");
-        content = resolveIncludes(content, dirname(filePath));
+        const resolvedFile = realpathSync(filePath);
+        if (!isPathWithinRoot(allowedRoot, resolvedFile)) continue;
+
+        let content = readFileSync(resolvedFile, "utf-8");
+        content = resolveIncludes(content, dirname(resolvedFile), allowedRoot);
         parts.push(`<!-- rule: ${file} -->\n${content}`);
       } catch {}
     }
@@ -162,11 +175,23 @@ function loadRulesDir(dir: string): string[] {
 }
 
 const INCLUDE_REGEX = /^@(\.\/[^\s]+|~\/[^\s]+|\/[^\s]+)$/gm;
-const MAX_INCLUDE_DEPTH = 5;
+const MAX_INCLUDE_DEPTH = 4;
+
+function isPathWithinRoot(rootPath: string, targetPath: string): boolean {
+  const pathFromRoot = relative(rootPath, targetPath);
+
+  if (pathFromRoot === "") return true;
+  if (isAbsolute(pathFromRoot)) return false;
+  if (pathFromRoot === "..") return false;
+  if (pathFromRoot.startsWith(`..${sep}`)) return false;
+
+  return true;
+}
 
 function resolveIncludes(
   content: string,
   basePath: string,
+  allowedRoot: string,
   visited: Set<string> = new Set(),
   depth = 0,
 ): string {
@@ -183,13 +208,24 @@ function resolveIncludes(
     }
     resolved = resolve(resolved);
 
-    if (visited.has(resolved)) return `<!-- circular: ${rawPath} -->`;
     if (!existsSync(resolved)) return `<!-- not found: ${rawPath} -->`;
 
     try {
-      visited.add(resolved);
-      const included = readFileSync(resolved, "utf-8");
-      return resolveIncludes(included, dirname(resolved), visited, depth + 1);
+      const resolvedFile = realpathSync(resolved);
+      if (!isPathWithinRoot(allowedRoot, resolvedFile)) {
+        return `<!-- external import blocked: ${rawPath} -->`;
+      }
+      if (visited.has(resolvedFile)) return `<!-- circular: ${rawPath} -->`;
+
+      visited.add(resolvedFile);
+      const included = readFileSync(resolvedFile, "utf-8");
+      return resolveIncludes(
+        included,
+        dirname(resolvedFile),
+        allowedRoot,
+        visited,
+        depth + 1,
+      );
     } catch {
       return `<!-- error reading: ${rawPath} -->`;
     }

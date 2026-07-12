@@ -99,6 +99,81 @@ test("loadProjectInstructions 按父子顺序加载项目指令、include 和规
   }
 });
 
+test("loadProjectInstructions 阻止 CLAUDE.md 引用所在目录之外的文件", async () => {
+  const promptModule = await import("../src/system-prompt.ts");
+  const originalCwd = process.cwd();
+  const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-external-"));
+  const project = join(root, "project");
+
+  mkdirSync(project);
+  writeFileSync(join(root, "private.md"), "outside private content");
+  writeFileSync(join(project, "CLAUDE.md"), "@./../private.md");
+
+  try {
+    process.chdir(project);
+    const result = promptModule.loadProjectInstructions();
+
+    assert.match(result, /<!-- external import blocked: \.\/\.\.\/private\.md -->/);
+    assert.doesNotMatch(result, /outside private content/);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectInstructions 阻止 include 通过符号链接越界", async () => {
+  const promptModule = await import("../src/system-prompt.ts");
+  const originalCwd = process.cwd();
+  const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-include-link-"));
+  const project = join(root, "project");
+  const outsideDirectory = join(root, "outside");
+
+  mkdirSync(project);
+  mkdirSync(outsideDirectory);
+  writeFileSync(join(outsideDirectory, "private.md"), "linked private content");
+  symlinkSync(
+    outsideDirectory,
+    join(project, "linked"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  writeFileSync(join(project, "CLAUDE.md"), "@./linked/private.md");
+
+  try {
+    process.chdir(project);
+    const result = promptModule.loadProjectInstructions();
+
+    assert.match(result, /<!-- external import blocked: \.\/linked\/private\.md -->/);
+    assert.doesNotMatch(result, /linked private content/);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectInstructions 将 include 深度限制为 4 跳", async () => {
+  const promptModule = await import("../src/system-prompt.ts");
+  const originalCwd = process.cwd();
+  const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-depth-"));
+
+  writeFileSync(join(root, "CLAUDE.md"), "@./level-1.md");
+  writeFileSync(join(root, "level-1.md"), "@./level-2.md");
+  writeFileSync(join(root, "level-2.md"), "@./level-3.md");
+  writeFileSync(join(root, "level-3.md"), "@./level-4.md");
+  writeFileSync(join(root, "level-4.md"), "@./level-5.md");
+  writeFileSync(join(root, "level-5.md"), "level five content");
+
+  try {
+    process.chdir(root);
+    const result = promptModule.loadProjectInstructions();
+
+    assert.match(result, /@\.\/level-5\.md/);
+    assert.doesNotMatch(result, /level five content/);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("loadProjectInstructions 向上加载 Rules", async () => {
   const promptModule = await import("../src/system-prompt.ts");
   const originalCwd = process.cwd();
@@ -151,6 +226,35 @@ test("loadProjectInstructions 递归加载 Rules", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "loadProjectInstructions 阻止 Rule 通过符号链接越界",
+  { skip: process.platform === "win32" },
+  async () => {
+    const promptModule = await import("../src/system-prompt.ts");
+    const originalCwd = process.cwd();
+    const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-rule-link-"));
+    const project = join(root, "project");
+    const rulesDirectory = join(project, ".claude", "rules");
+    const outsideFile = join(root, "private.md");
+
+    mkdirSync(rulesDirectory, { recursive: true });
+    writeFileSync(join(rulesDirectory, "good.md"), "good rule");
+    writeFileSync(outsideFile, "linked rule private content");
+    symlinkSync(outsideFile, join(rulesDirectory, "external.md"), "file");
+
+    try {
+      process.chdir(project);
+      const result = promptModule.loadProjectInstructions();
+
+      assert.match(result, /good rule/);
+      assert.doesNotMatch(result, /linked rule private content/);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("loadProjectInstructions 在单个 Rule 读取失败时继续加载", async () => {
   const promptModule = await import("../src/system-prompt.ts");
