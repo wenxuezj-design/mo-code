@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { globSync } from "glob";
 
 import { getGitContext } from "./git-context.ts";
 import { buildMemoryPromptSection } from "./memory/deferred.ts";
@@ -107,12 +108,13 @@ export function buildUserContextReminder(): string {
     String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
-  const claudeMd = loadClaudeMd();
-  return `<system-reminder>\n${claudeMd}\n# currentDate\nToday's date is ${date}.\n</system-reminder>`;
+  const projectInstructions = loadProjectInstructions();
+  return `<system-reminder>\n${projectInstructions}\n# currentDate\nToday's date is ${date}.\n</system-reminder>`;
 }
 
-export function loadClaudeMd(): string {
-  const parts: string[] = [];
+export function loadProjectInstructions(): string {
+  const claudeMdParts: string[] = [];
+  const ruleParts: string[] = [];
   let dir = process.cwd();
 
   while (true) {
@@ -121,34 +123,42 @@ export function loadClaudeMd(): string {
       try {
         let content = readFileSync(file, "utf-8");
         content = resolveIncludes(content, dir);
-        parts.unshift(content);
+        claudeMdParts.unshift(content);
       } catch {}
     }
+    ruleParts.unshift(...loadRulesDir(dir));
 
     const parent = resolve(dir, "..");
     if (parent === dir) break;
     dir = parent;
   }
 
-  const rules = loadRulesDir(process.cwd());
-  const claudeMd = parts.length > 0
-    ? "\n\n# Project Instructions (CLAUDE.md)\n" + parts.join("\n\n---\n\n")
+  const claudeMd = claudeMdParts.length > 0
+    ? "\n\n# Project Instructions (CLAUDE.md)\n" + claudeMdParts.join("\n\n---\n\n")
+    : "";
+  const rules = ruleParts.length > 0
+    ? "\n\n## Rules\n" + ruleParts.join("\n\n")
     : "";
   return claudeMd + rules;
 }
 
-function loadRulesDir(dir: string): string {
+function loadRulesDir(dir: string): string[] {
   const rulesDir = join(dir, ".claude", "rules");
-  if (!existsSync(rulesDir)) return "";
-
-  const files = readdirSync(rulesDir).filter((file) => file.endsWith(".md")).sort();
-  const parts: string[] = [];
-  for (const file of files) {
-    let content = readFileSync(join(rulesDir, file), "utf-8");
-    content = resolveIncludes(content, rulesDir);
-    parts.push(`<!-- rule: ${file} -->\n${content}`);
+  try {
+    const files = globSync("**/*.md", { cwd: rulesDir, nodir: true }).sort();
+    const parts: string[] = [];
+    for (const file of files) {
+      try {
+        const filePath = join(rulesDir, file);
+        let content = readFileSync(filePath, "utf-8");
+        content = resolveIncludes(content, dirname(filePath));
+        parts.push(`<!-- rule: ${file} -->\n${content}`);
+      } catch {}
+    }
+    return parts;
+  } catch {
+    return [];
   }
-  return parts.length > 0 ? "\n\n## Rules\n" + parts.join("\n\n") : "";
 }
 
 const INCLUDE_REGEX = /^@(\.\/[^\s]+|~\/[^\s]+|\/[^\s]+)$/gm;

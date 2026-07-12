@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -67,9 +68,9 @@ test("动态能力占位模块提供空文本", async () => {
   }
 });
 
-test("loadClaudeMd 按父子顺序加载项目指令、include 和规则", async () => {
+test("loadProjectInstructions 按父子顺序加载项目指令、include 和规则", async () => {
   const promptModule = await import("../src/system-prompt.ts");
-  assert.equal(typeof promptModule.loadClaudeMd, "function");
+  assert.equal(typeof promptModule.loadProjectInstructions, "function");
 
   const originalCwd = process.cwd();
   const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-"));
@@ -86,12 +87,90 @@ test("loadClaudeMd 按父子顺序加载项目指令、include 和规则", async
 
   try {
     process.chdir(workingDirectory);
-    const result = promptModule.loadClaudeMd();
+    const result = promptModule.loadProjectInstructions();
 
     assert.match(result, /# Project Instructions \(CLAUDE\.md\)/);
     assert.match(result, /shared instructions/);
     assert.ok(result.indexOf("root instructions") < result.indexOf("project instructions"));
     assert.ok(result.indexOf("rule a") < result.indexOf("rule b"));
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectInstructions 向上加载 Rules", async () => {
+  const promptModule = await import("../src/system-prompt.ts");
+  const originalCwd = process.cwd();
+  const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-rules-"));
+  const project = join(root, "project");
+  const workingDirectory = join(project, "nested");
+  const projectRulesDirectory = join(project, ".claude", "rules");
+  const localRulesDirectory = join(workingDirectory, ".claude", "rules");
+
+  mkdirSync(projectRulesDirectory, { recursive: true });
+  mkdirSync(localRulesDirectory, { recursive: true });
+  writeFileSync(join(projectRulesDirectory, "project.md"), "project rule");
+  writeFileSync(join(localRulesDirectory, "local.md"), "local rule");
+
+  try {
+    process.chdir(workingDirectory);
+    const result = promptModule.loadProjectInstructions();
+
+    assert.match(result, /project rule/);
+    assert.match(result, /local rule/);
+    assert.ok(result.indexOf("project rule") < result.indexOf("local rule"));
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectInstructions 递归加载 Rules", async () => {
+  const promptModule = await import("../src/system-prompt.ts");
+  const originalCwd = process.cwd();
+  const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-nested-rules-"));
+  const workingDirectory = join(root, "project");
+  const nestedRulesDirectory = join(
+    workingDirectory,
+    ".claude",
+    "rules",
+    "typescript",
+  );
+
+  mkdirSync(nestedRulesDirectory, { recursive: true });
+  writeFileSync(join(nestedRulesDirectory, "testing.md"), "nested rule");
+
+  try {
+    process.chdir(workingDirectory);
+    const result = promptModule.loadProjectInstructions();
+
+    assert.match(result, /nested rule/);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectInstructions 在单个 Rule 读取失败时继续加载", async () => {
+  const promptModule = await import("../src/system-prompt.ts");
+  const originalCwd = process.cwd();
+  const root = mkdtempSync(join(os.tmpdir(), "mo-code-prompt-broken-rule-"));
+  const rulesDirectory = join(root, ".claude", "rules");
+  const directoryTarget = join(root, "directory-target");
+
+  mkdirSync(rulesDirectory, { recursive: true });
+  mkdirSync(directoryTarget);
+  writeFileSync(join(root, "CLAUDE.md"), "project instructions");
+  writeFileSync(join(rulesDirectory, "good.md"), "good rule");
+  symlinkSync(directoryTarget, join(rulesDirectory, "bad.md"), "dir");
+
+  try {
+    process.chdir(root);
+    const result = promptModule.loadProjectInstructions();
+
+    assert.match(result, /project instructions/);
+    assert.match(result, /good rule/);
   } finally {
     process.chdir(originalCwd);
     rmSync(root, { recursive: true, force: true });
