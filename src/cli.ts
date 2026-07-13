@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { Agent } from "./agent-loop.ts";
@@ -18,9 +19,26 @@ Options:
       --max-budget-usd <amount>      限制本次运行的最大费用
 `;
 
+function getVersion(): string {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+  ) as { version?: unknown };
+
+  if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
+    throw new Error("package.json 中缺少有效的 version");
+  }
+
+  return packageJson.version;
+}
+
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(HELP_TEXT);
+    return;
+  }
+
+  if (args.includes("--version") || args.includes("-v")) {
+    process.stdout.write(`${getVersion()} (mo-code)\n`);
     return;
   }
 

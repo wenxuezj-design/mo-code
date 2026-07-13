@@ -26,3 +26,17 @@ test("--help 和 -h 显示 CLI 帮助后退出", () => {
     assert.match(result.stdout, /--max-budget-usd <amount>/);
   }
 });
+
+test("--version 和 -v 显示当前版本后退出", () => {
+  for (const option of ["--version", "-v"]) {
+    const result = spawnSync(
+      process.execPath,
+      ["--no-warnings", "--experimental-strip-types", cliPath, option],
+      { cwd: projectRoot, encoding: "utf-8" },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout, "0.4.0 (mo-code)\n");
+  }
+});
