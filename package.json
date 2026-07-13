@@ -4,12 +4,20 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "story:lettering": "node docs/story/tools/lettering/server.mjs",
+    "story:export": "node docs/story/tools/lettering/export-cli.mjs",
+    "story:assets:pull": "node docs/story/tools/lettering/assets-cli.mjs pull",
+    "story:assets:verify": "node docs/story/tools/lettering/assets-cli.mjs verify",
+    "story:assets:push": "node docs/story/tools/lettering/assets-cli.mjs push"
   },
   "devDependencies": {
     "@types/node": "^26.1.0"
   },
   "dependencies": {
-    "glob": "^13.0.6"
+    "fflate": "^0.8.3",
+    "glob": "^13.0.6",
+    "pdf-lib": "^1.17.1",
+    "playwright-core": "^1.61.1"
   }
 }

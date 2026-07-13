@@ -9,6 +9,32 @@ lerna-debug.log*
 # Local implementation references
 .references/
 
+# Local IDE metadata
+.idea/
+
+# Local high-resolution story exports
+.story-assets/
+
+# Story production binaries live in remote storage; only documented lightweight
+# character-reference exceptions may already be tracked by Git.
+docs/story/**/*.[pP][nN][gG]
+docs/story/**/*.[jJ][pP][gG]
+docs/story/**/*.[jJ][pP][eE][gG]
+docs/story/**/*.[wW][eE][bB][pP]
+docs/story/**/*.[gG][iI][fF]
+docs/story/**/*.[aA][vV][iI][fF]
+docs/story/**/*.[tT][iI][fF]
+docs/story/**/*.[tT][iI][fF][fF]
+docs/story/**/*.[pP][sS][dD]
+docs/story/**/*.[cC][lL][iI][pP]
+docs/story/**/*.[kK][rR][aA]
+docs/story/**/*.[pP][dD][fF]
+docs/story/**/*.[cC][bB][zZ]
+docs/story/**/*.[zZ][iI][pP]
+
+# Local brainstorming previews
+.superpowers/
+
 # Local implementation plans
 docs/superpowers/
 

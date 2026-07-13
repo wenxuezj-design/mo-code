@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mo-code 漫画排字</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">墨</span>
+          <span><strong>mo-code 漫画排字</strong><small>底图与台词分离</small></span>
+        </div>
+        <div class="save-state" id="saveStatus" data-state="loading">正在载入</div>
+        <div class="top-actions">
+          <button id="checkOverflow" class="button secondary">检查溢出</button>
+          <button id="exportPng" class="button secondary">生成 PNG</button>
+          <button id="exportWebp" class="button primary">生成 WebP</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar page-sidebar">
+          <p class="eyebrow">当前页面</p>
+          <div class="page-summary">
+            <img id="pageThumb" alt="页面缩略图" />
+            <span><strong id="pageTitle">第 1 页</strong><small id="pageMeta">载入中</small></span>
+          </div>
+          <div class="sidebar-section">
+            <p class="eyebrow">图层</p>
+            <div class="layer-row"><span><i class="layer-dot text-dot"></i>台词与旁白</span><b id="itemCount">0</b></div>
+            <div class="layer-row"><span><i class="layer-dot image-dot"></i>漫画底图</span><b>锁定</b></div>
+          </div>
+          <div class="hint-card">拖动文字框移动位置；拖动边缘与四角的控制点改变区块大小。所有坐标都按原图像素保存。</div>
+        </aside>
+
+        <section class="stage-wrap">
+          <div class="stage-toolbar">
+            <span>原图坐标</span>
+            <button id="autoFit" class="tool-button">自动适配</button>
+            <button id="toggleGuides" class="tool-button active">显示边界</button>
+            <span id="zoomLabel">—</span>
+          </div>
+          <div class="page-frame" id="pageFrame">
+            <div class="page-canvas" id="pageCanvas">
+              <img id="baseImage" alt="漫画底图" draggable="false" />
+              <canvas id="letteringPreview" class="lettering-preview" aria-hidden="true"></canvas>
+              <div id="letteringLayer" class="lettering-layer"></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="sidebar inspector-sidebar">
+          <p class="eyebrow">台词</p>
+          <div id="dialogueList" class="dialogue-list"></div>
+
+          <section class="inspector" id="inspector">
+            <p class="eyebrow">选中样式</p>
+            <label class="field"><span>文字</span><textarea id="textValue" rows="3"></textarea></label>
+            <div class="field">
+              <span>排版方向</span>
+              <div class="segmented">
+                <button id="directionHorizontal" data-direction="horizontal">横排</button>
+                <button id="directionVertical" data-direction="vertical">竖排</button>
+              </div>
+            </div>
+            <label class="field"><span>字号 <b id="fontSizeValue">—</b></span><input id="fontSize" type="range" min="12" max="54" step="1" /></label>
+            <label class="field"><span>内部边距 <b id="paddingValue">—</b></span><input id="padding" type="range" min="0" max="40" step="1" /></label>
+            <div class="geometry" id="geometry"></div>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="statusbar">
+        <span id="validationStatus">等待载入页面</span>
+        <span>输出路径由项目约定管理，不打开文件选择器</span>
+      </footer>
+    </div>
+    <div class="toast" id="toast" role="status"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

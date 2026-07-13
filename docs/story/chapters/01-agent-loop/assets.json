@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "chapter": "01-agent-loop",
+  "pages": {
+    "01": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-01-base-v1.webp",
+        "cacheFile": "page-01-base.webp",
+        "sha256": "bf956a4a9742029f588007a8835b9131ebfacc7ec8c742457c7405f7e9169d55",
+        "bytes": 315524,
+        "width": 864,
+        "height": 1821
+      }
+    },
+    "02": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-02-base-v1.webp",
+        "cacheFile": "page-02-base.webp",
+        "sha256": "f074c6310e6e0c12d5bd14457e9bc375026cfe0684a46e5f5d35d3ef3de32bfc",
+        "bytes": 325886,
+        "width": 864,
+        "height": 1820
+      }
+    }
+  }
+}
