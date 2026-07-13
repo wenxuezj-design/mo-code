@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 import { Agent } from "./agent-loop.ts";
@@ -24,6 +25,7 @@ type ParsedArgs = {
   version: boolean;
   print: boolean;
   model?: string;
+  permissionMode?: string;
   prompt?: string;
 };
 
@@ -32,6 +34,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   let version = false;
   let print = false;
   let model: string | undefined;
+  let permissionMode: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -44,6 +47,8 @@ export function parseArgs(args: string[]): ParsedArgs {
       print = true;
     } else if (arg === "--model" || arg === "-m") {
       model = args[++i];
+    } else if (arg === "--permission-mode") {
+      permissionMode = args[++i];
     } else {
       positional.push(arg);
     }
@@ -54,6 +59,7 @@ export function parseArgs(args: string[]): ParsedArgs {
     version,
     print,
     model,
+    permissionMode,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
   };
 }
@@ -70,8 +76,21 @@ function getVersion(): string {
   return packageJson.version;
 }
 
-async function runRepl(_agent: Agent, _initialPrompt?: string): Promise<void> {
-  // TODO: 实现交互模式
+async function runRepl(agent: Agent, initialPrompt?: string): Promise<void> {
+  if (initialPrompt) await agent.chat(initialPrompt);
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  rl.setPrompt("> ");
+  rl.prompt();
+
+  for await (const line of rl) {
+    const input = line.trim();
+    if (input === "/exit" || input === "/quit") break;
+    if (input) await agent.chat(input);
+    rl.prompt();
+  }
+
+  rl.close();
 }
 
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
@@ -85,6 +104,10 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   if (parsed.version) {
     process.stdout.write(`${getVersion()} (mo-code)\n`);
     return;
+  }
+
+  if (parsed.permissionMode) {
+    process.stderr.write("Warning: --permission-mode 暂未实现权限控制\n");
   }
 
   const agent = new Agent({ model: parsed.model });

@@ -70,13 +70,38 @@ test("--model 和 -m 设置单次任务使用的模型", async () => {
   }
 });
 
+test("--permission-mode 提示权限控制尚未实现", async () => {
+  const result = await captureCliRequest([
+    "--print",
+    "--permission-mode",
+    "plan",
+    "hello",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "Warning: --permission-mode 暂未实现权限控制\n");
+  assert.equal(result.requests.length, 1);
+  assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello");
+});
+
 test("不带 --print 的 Prompt 进入交互模式", async () => {
   const result = await captureCliRequest(["hello", "world"]);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "");
   assert.equal(result.stderr, "");
-  assert.equal(result.requests.length, 0);
+  assert.equal(result.requests.length, 1);
+  assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello world");
+});
+
+test("交互模式读取输入并通过内置命令退出", async () => {
+  for (const command of ["/exit", "/quit"]) {
+    const result = await captureCliRequest([], `hello\n${command}\n`);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.requests.length, 1);
+    assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello");
+  }
 });
 
 test("--print 缺少 Prompt 时直接退出", async () => {
@@ -92,12 +117,12 @@ test("无参数时不执行默认任务", async () => {
   const result = await captureCliRequest([]);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "");
+  assert.equal(result.stdout, "> ");
   assert.equal(result.stderr, "");
   assert.equal(result.requests.length, 0);
 });
 
-async function captureCliRequest(args) {
+async function captureCliRequest(args, stdin = "") {
   const requests = [];
   const server = createServer((req, res) => {
     let raw = "";
@@ -141,7 +166,7 @@ async function captureCliRequest(args) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.stdin.end();
+    child.stdin.end(stdin);
 
     const status = await new Promise((resolve, reject) => {
       child.on("error", reject);
