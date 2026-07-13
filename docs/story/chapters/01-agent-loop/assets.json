@@ -21,6 +21,16 @@
         "width": 864,
         "height": 1820
       }
+    },
+    "03": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-03-base-v1.webp",
+        "cacheFile": "page-03-base.webp",
+        "sha256": "46d0b6bbd91d5118d14ab9bfccc6eaa1114d136c5b8b7371be2b9a4f208dddaa",
+        "bytes": 352126,
+        "width": 864,
+        "height": 1821
+      }
     }
   }
 }
