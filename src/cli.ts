@@ -19,6 +19,39 @@ Options:
       --max-budget-usd <amount>      限制本次运行的最大费用
 `;
 
+type ParsedArgs = {
+  help: boolean;
+  version: boolean;
+  print: boolean;
+  prompt?: string;
+};
+
+export function parseArgs(args: string[]): ParsedArgs {
+  let help = false;
+  let version = false;
+  let print = false;
+  const positional: string[] = [];
+
+  for (const arg of args) {
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+    } else if (arg === "--version" || arg === "-v") {
+      version = true;
+    } else if (arg === "--print" || arg === "-p") {
+      print = true;
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  return {
+    help,
+    version,
+    print,
+    prompt: positional.length > 0 ? positional.join(" ") : undefined,
+  };
+}
+
 function getVersion(): string {
   const packageJson = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
@@ -31,19 +64,31 @@ function getVersion(): string {
   return packageJson.version;
 }
 
+async function runRepl(_agent: Agent, _initialPrompt?: string): Promise<void> {
+  // TODO: 实现交互模式
+}
+
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
-  if (args.includes("--help") || args.includes("-h")) {
+  const parsed = parseArgs(args);
+
+  if (parsed.help) {
     process.stdout.write(HELP_TEXT);
     return;
   }
 
-  if (args.includes("--version") || args.includes("-v")) {
+  if (parsed.version) {
     process.stdout.write(`${getVersion()} (mo-code)\n`);
     return;
   }
 
-  const prompt = args.join(" ") || "Read the file greeting.txt and tell me what it says.";
-  await new Agent().chat(prompt);
+  const agent = new Agent();
+
+  if (parsed.print) {
+    if (parsed.prompt) await agent.chat(parsed.prompt);
+    return;
+  }
+
+  await runRepl(agent, parsed.prompt);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
