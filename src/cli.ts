@@ -23,6 +23,7 @@ type ParsedArgs = {
   help: boolean;
   version: boolean;
   print: boolean;
+  model?: string;
   prompt?: string;
 };
 
@@ -30,15 +31,19 @@ export function parseArgs(args: string[]): ParsedArgs {
   let help = false;
   let version = false;
   let print = false;
+  let model: string | undefined;
   const positional: string[] = [];
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === "--help" || arg === "-h") {
       help = true;
     } else if (arg === "--version" || arg === "-v") {
       version = true;
     } else if (arg === "--print" || arg === "-p") {
       print = true;
+    } else if (arg === "--model" || arg === "-m") {
+      model = args[++i];
     } else {
       positional.push(arg);
     }
@@ -48,6 +53,7 @@ export function parseArgs(args: string[]): ParsedArgs {
     help,
     version,
     print,
+    model,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
   };
 }
@@ -81,7 +87,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     return;
   }
 
-  const agent = new Agent();
+  const agent = new Agent({ model: parsed.model });
 
   if (parsed.print) {
     if (parsed.prompt) await agent.chat(parsed.prompt);

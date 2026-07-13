@@ -54,6 +54,22 @@ test("--print 和 -p 执行位置参数中的单次任务", async () => {
   }
 });
 
+test("--model 和 -m 设置单次任务使用的模型", async () => {
+  for (const option of ["--model", "-m"]) {
+    const result = await captureCliRequest([
+      "--print",
+      option,
+      "test-model",
+      "hello",
+    ]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.requests.length, 1);
+    assert.equal(result.requests[0].model, "test-model");
+    assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello");
+  }
+});
+
 test("不带 --print 的 Prompt 进入交互模式", async () => {
   const result = await captureCliRequest(["hello", "world"]);
 
