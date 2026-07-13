@@ -1,5 +1,11 @@
 import { pathToFileURL } from "node:url";
 
+import {
+  SYSTEM_PROMPT_TEMPLATE,
+  buildSystemPrompt,
+  buildUserContextReminder,
+  type SystemPromptBlock,
+} from "./system-prompt.ts";
 import { executeTool, toolDefinitions } from "./tools/index.ts";
 
 // 1. Type definitions
@@ -32,9 +38,8 @@ type MessageResponse = {
   content: ContentBlock[];
 };
 
-// 2. Model, system prompt, and tool definitions
+// 2. Model and tool definitions
 const MODEL = "mock";
-const SYSTEM_PROMPT = "You are a tiny coding agent. Use tools when needed.";
 
 // 3. A tiny Anthropic-compatible client
 class AnthropicLikeClient {
@@ -66,19 +71,37 @@ export class Agent {
   private client: AnthropicLikeClient;
   private messages: Message[] = [];
   private readFileState = new Map<string, number>();
+  private systemPrompt: SystemPromptBlock[];
+  private userContextReminder: string;
 
-  constructor(baseURL = process.env.ANTHROPIC_BASE_URL ?? "http://127.0.0.1:3000") {
+  constructor(
+    baseURL = process.env.ANTHROPIC_BASE_URL ?? "http://127.0.0.1:3000",
+    staticPrompt = SYSTEM_PROMPT_TEMPLATE,
+  ) {
     this.client = new AnthropicLikeClient(baseURL);
+    this.systemPrompt = buildSystemPrompt(staticPrompt);
+    this.userContextReminder = buildUserContextReminder();
   }
 
   async chat(userText: string): Promise<void> {
-    this.messages.push({ role: "user", content: userText });
+    const isFirstTurn = this.messages.length === 0;
+    if (isFirstTurn) {
+      this.messages.push({
+        role: "user",
+        content: [
+          { type: "text", text: this.userContextReminder },
+          { type: "text", text: userText },
+        ],
+      });
+    } else {
+      this.messages.push({ role: "user", content: userText });
+    }
 
     while (true) {
       const request = {
         model: MODEL,
         max_tokens: 4096,
-        system: SYSTEM_PROMPT,
+        system: this.systemPrompt,
         tools: toolDefinitions,
         messages: this.messages,
       };
