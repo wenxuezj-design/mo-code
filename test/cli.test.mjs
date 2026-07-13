@@ -1,7 +1,17 @@
 import { spawn, spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -122,8 +132,91 @@ test("无参数时不执行默认任务", async () => {
   assert.equal(result.requests.length, 0);
 });
 
-async function captureCliRequest(args, stdin = "") {
+test("新会话使用 UUID，并在每轮完成后覆盖同一个 JSON 文件", async () => {
+  const result = await captureCliRequest([], "first\nsecond\n/exit\n");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 2);
+  assert.equal(result.sessions.length, 1);
+
+  const [{ filename, data: session }] = result.sessions;
+  assert.match(
+    session.id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  assert.equal(filename, `${session.id}.json`);
+  assert.equal(session.version, 1);
+  assert.equal(session.cwd, projectRoot);
+  assert.equal(session.model, "mock");
+  assert.equal(session.messages.length, 4);
+  assert.equal(session.messages.at(-2).content, "second");
+  assert.ok(Date.parse(session.createdAt));
+  assert.ok(Date.parse(session.updatedAt));
+});
+
+test("会话 JSON 保存完整的 tool_use 和 tool_result", async () => {
+  const result = await captureCliRequest(
+    ["--print", "read package.json"],
+    "",
+    {
+      responses: [
+        {
+          content: [{
+            type: "tool_use",
+            id: "tool-1",
+            name: "read_file",
+            input: { file_path: "package.json" },
+          }],
+        },
+        { content: [{ type: "text", text: "done" }] },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.sessions.length, 1);
+
+  const messages = result.sessions[0].data.messages;
+  const toolUse = messages[1].content[0];
+  const toolResult = messages[2].content[0];
+  assert.deepEqual(toolUse, {
+    type: "tool_use",
+    id: "tool-1",
+    name: "read_file",
+    input: { file_path: "package.json" },
+  });
+  assert.equal(toolResult.type, "tool_result");
+  assert.equal(toolResult.tool_use_id, "tool-1");
+  assert.match(toolResult.content, /"name": "mo-code"/);
+  assert.deepEqual(messages.at(-1).content, [{ type: "text", text: "done" }]);
+});
+
+test("会话保存失败时警告但不中断后续对话", async () => {
+  const result = await captureCliRequest(
+    [],
+    "first\nsecond\n/exit\n",
+    { invalidHome: true },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 2);
+  assert.equal(
+    result.stderr.match(/Warning: 会话保存失败:/g)?.length,
+    2,
+  );
+  assert.equal(result.sessions.length, 0);
+});
+
+async function captureCliRequest(args, stdin = "", options = {}) {
   const requests = [];
+  const testRoot = mkdtempSync(join(tmpdir(), "mo-code-cli-"));
+  const home = options.invalidHome ? join(testRoot, "home-file") : join(testRoot, "home");
+  if (options.invalidHome) {
+    writeFileSync(home, "not a directory");
+  } else {
+    mkdirSync(home);
+  }
+
   const server = createServer((req, res) => {
     let raw = "";
     req.setEncoding("utf-8");
@@ -132,8 +225,10 @@ async function captureCliRequest(args, stdin = "") {
     });
     req.on("end", () => {
       requests.push(JSON.parse(raw));
+      const response = options.responses?.[requests.length - 1]
+        ?? { content: [{ type: "text", text: "done" }] };
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ content: [{ type: "text", text: "done" }] }));
+      res.end(JSON.stringify(response));
     });
   });
 
@@ -151,6 +246,7 @@ async function captureCliRequest(args, stdin = "") {
         env: {
           ...process.env,
           ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+          HOME: home,
         },
         stdio: ["pipe", "pipe", "pipe"],
       },
@@ -173,10 +269,19 @@ async function captureCliRequest(args, stdin = "") {
       child.on("close", resolve);
     });
 
-    return { status, stdout, stderr, requests };
+    const sessionDir = join(home, ".mo-code", "sessions");
+    const sessions = existsSync(sessionDir)
+      ? readdirSync(sessionDir).map((filename) => ({
+          filename,
+          data: JSON.parse(readFileSync(join(sessionDir, filename), "utf-8")),
+        }))
+      : [];
+
+    return { status, stdout, stderr, requests, sessions };
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
+    rmSync(testRoot, { recursive: true, force: true });
   }
 }

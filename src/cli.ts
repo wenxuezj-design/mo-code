@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 import { Agent } from "./agent-loop.ts";
+import { createSession, saveSession, type SessionData } from "./session.ts";
 
 export const HELP_TEXT = `Usage: mo-code [options] [prompt...]
 
@@ -76,8 +77,28 @@ function getVersion(): string {
   return packageJson.version;
 }
 
-async function runRepl(agent: Agent, initialPrompt?: string): Promise<void> {
-  if (initialPrompt) await agent.chat(initialPrompt);
+function saveAgentSession(agent: Agent, session: SessionData): void {
+  session.messages = agent.getMessages();
+
+  try {
+    saveSession(session);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Warning: 会话保存失败: ${message}\n`);
+  }
+}
+
+async function chatAndSave(agent: Agent, session: SessionData, input: string): Promise<void> {
+  await agent.chat(input);
+  saveAgentSession(agent, session);
+}
+
+async function runRepl(
+  agent: Agent,
+  session: SessionData,
+  initialPrompt?: string,
+): Promise<void> {
+  if (initialPrompt) await chatAndSave(agent, session, initialPrompt);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   rl.setPrompt("> ");
@@ -86,7 +107,7 @@ async function runRepl(agent: Agent, initialPrompt?: string): Promise<void> {
   for await (const line of rl) {
     const input = line.trim();
     if (input === "/exit" || input === "/quit") break;
-    if (input) await agent.chat(input);
+    if (input) await chatAndSave(agent, session, input);
     rl.prompt();
   }
 
@@ -111,13 +132,14 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   }
 
   const agent = new Agent({ model: parsed.model });
+  const session = createSession(process.cwd(), agent.getModel());
 
   if (parsed.print) {
-    if (parsed.prompt) await agent.chat(parsed.prompt);
+    if (parsed.prompt) await chatAndSave(agent, session, parsed.prompt);
     return;
   }
 
-  await runRepl(agent, parsed.prompt);
+  await runRepl(agent, session, parsed.prompt);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

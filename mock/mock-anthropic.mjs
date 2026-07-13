@@ -1,6 +1,18 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
+/**
+不调用真实模型。主要用于测试 Agent Loop 和工具调用。
+核心流程：
+1. 接收 POST /v1/messages 请求。
+2. 检查消息中是否已有 tool_result。
+3. 没有 tool_result 时，返回一个 read_file 工具调用。
+4. Agent 执行 read_file。
+5. Agent 把结果再次发送给 Mock。
+6. Mock 返回最终文本。
+ * 
+ * **/
+
 function findToolResult(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const content = messages[i]?.content;

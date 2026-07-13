@@ -9,7 +9,7 @@ import {
 import { executeTool, toolDefinitions } from "./tools/index.ts";
 
 // 1. Type definitions
-type Message = {
+export type Message = {
   role: "user" | "assistant";
   content: string | ContentBlock[];
 };
@@ -32,7 +32,7 @@ type ToolResultBlock = {
   content: string;
 };
 
-type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
 
 type MessageResponse = {
   content: ContentBlock[];
@@ -91,6 +91,14 @@ export class Agent {
     this.systemPrompt = buildSystemPrompt(staticPrompt);
     this.userContextReminder = buildUserContextReminder();
     this.model = options.model ?? MODEL;
+  }
+
+  getMessages(): Message[] {
+    return structuredClone(this.messages);
+  }
+
+  getModel(): string {
+    return this.model;
   }
 
   async chat(userText: string): Promise<void> {
