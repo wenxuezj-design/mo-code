@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   truncateSync,
+  unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -148,6 +149,21 @@ export function loadSession(id: string): SessionData {
     updatedAt: lastTurn?.timestamp ?? header.createdAt,
     messages: turns.flatMap((turn) => turn.messages),
   };
+}
+
+export function deleteSession(id: string): void {
+  if (!SESSION_ID_PATTERN.test(id)) {
+    throw new Error(`无效的会话 ID: ${id}`);
+  }
+
+  try {
+    unlinkSync(join(SESSION_DIR, `${id}.jsonl`));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`找不到会话: ${id}`);
+    }
+    throw error;
+  }
 }
 
 export function listSessions(cwd: string): SessionListResult {

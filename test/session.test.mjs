@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -62,6 +63,27 @@ test("listSessions 返回当前工作目录的会话并按更新时间从新到�
     [latestSessionId, olderSessionId],
   );
   assert.deepEqual(result.skippedFiles, [`${damagedSessionId}.jsonl`]);
+});
+
+test("deleteSession 直接删除指定会话文件", () => {
+  mkdirSync(sessionDir, { recursive: true });
+  const filePath = join(sessionDir, `${damagedSessionId}.jsonl`);
+  writeFileSync(filePath, "{not-json");
+
+  sessionModule.deleteSession(damagedSessionId);
+
+  assert.equal(existsSync(filePath), false);
+});
+
+test("deleteSession 对无效 ID 和不存在的会话给出明确错误", () => {
+  assert.throws(
+    () => sessionModule.deleteSession("../other-file"),
+    { message: "无效的会话 ID: ../other-file" },
+  );
+  assert.throws(
+    () => sessionModule.deleteSession(latestSessionId),
+    { message: `找不到会话: ${latestSessionId}` },
+  );
 });
 
 function writeSession({ id, cwd, updatedAt }) {

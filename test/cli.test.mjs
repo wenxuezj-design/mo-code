@@ -39,6 +39,7 @@ test("--help 和 -h 显示 CLI 帮助后退出", () => {
     assert.match(result.stdout, /-v, --version/);
     assert.match(result.stdout, /-p, --print/);
     assert.match(result.stdout, /-r, --resume \[id\]/);
+    assert.match(result.stdout, /--delete-session \[id\]/);
     assert.match(result.stdout, /--mortis/);
     assert.match(result.stdout, /--max-budget-usd <amount>/);
   }
@@ -483,6 +484,88 @@ test("--continue 和 --resume 不能同时使用", async () => {
   assert.equal(result.status, 1);
   assert.equal(result.requests.length, 0);
   assert.equal(result.stderr, "Error: --continue 和 --resume 不能同时使用\n");
+});
+
+test("--delete-session 通过 ID 确认后删除会话且不调用模型", async () => {
+  const result = await captureCliRequest(
+    ["--delete-session", sessionId],
+    "y\n",
+    { initialSession: "{not-json", initialSessionId: sessionId },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 0);
+  assert.match(result.stdout, new RegExp(`确定删除会话 ${sessionId}`));
+  assert.match(result.stdout, new RegExp(`已删除会话: ${sessionId}`));
+});
+
+test("--delete-session 未确认时取消并保留会话", async () => {
+  const result = await captureCliRequest(
+    ["--delete-session", sessionId],
+    "n\n",
+    { initialSession: createStoredSession() },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 1);
+  assert.match(result.stdout, /已取消/);
+});
+
+test("--delete-session 未提供 ID 时从当前目录会话列表选择并确认", async () => {
+  const otherProjectSession = createStoredSession({
+    id: otherProjectSessionId,
+    cwd: "/other/project",
+  });
+  const result = await captureCliRequest(
+    ["--delete-session"],
+    "1\nyes\n",
+    {
+      initialSessions: [
+        { id: sessionId, contents: createStoredSession() },
+        { id: otherProjectSessionId, contents: otherProjectSession },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.deepEqual(
+    result.sessions.map(({ filename }) => filename),
+    [`${otherProjectSessionId}.jsonl`],
+  );
+  assert.match(result.stdout, /可删除的会话/);
+  assert.match(result.stdout, /old question/);
+  assert.match(result.stdout, new RegExp(`已删除会话: ${sessionId}`));
+});
+
+test("--delete-session 未提供 ID 且当前目录没有会话时明确报错", async () => {
+  const result = await captureCliRequest(["--delete-session"]);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.stderr, "Error: 当前目录没有可删除的会话\n");
+});
+
+test("--delete-session 不能与恢复参数同时使用", async () => {
+  for (const option of ["--resume", "--continue"]) {
+    const result = await captureCliRequest([
+      "--delete-session",
+      sessionId,
+      option,
+    ]);
+
+    assert.equal(result.status, 1);
+    assert.equal(result.requests.length, 0);
+    assert.equal(
+      result.stderr,
+      "Error: --delete-session 不能和 --continue 或 --resume 同时使用\n",
+    );
+  }
 });
 
 test("会话保存失败时警告但不中断后续对话", async () => {

@@ -6,6 +6,7 @@ import { Agent } from "./agent-loop.ts";
 import {
   appendSessionTurn,
   createSession,
+  deleteSession,
   findLatestSession,
   listSessions,
   loadSession,
@@ -20,6 +21,7 @@ Options:
   -p, --print                        执行非交互任务后退出
   -c, --continue                     继续当前项目最近的会话
   -r, --resume [id]                  恢复指定会话；未提供 ID 时从列表选择
+      --delete-session [id]          删除会话；未提供 ID 时从列表选择
   -m, --model <model>                设置本次会话使用的模型
       --permission-mode <mode>       设置权限模式
       --dangerously-skip-permissions 跳过权限检查，仅用于隔离环境
@@ -34,9 +36,11 @@ type ParsedArgs = {
   print: boolean;
   continueSession: boolean;
   resume: boolean;
+  deleteSession: boolean;
   model?: string;
   permissionMode?: string;
   resumeId?: string;
+  deleteSessionId?: string;
   prompt?: string;
 };
 
@@ -46,9 +50,11 @@ export function parseArgs(args: string[]): ParsedArgs {
   let print = false;
   let continueSession = false;
   let resume = false;
+  let deleteSessionRequested = false;
   let model: string | undefined;
   let permissionMode: string | undefined;
   let resumeId: string | undefined;
+  let deleteSessionId: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -72,6 +78,13 @@ export function parseArgs(args: string[]): ParsedArgs {
         resumeId = sessionId;
         i++;
       }
+    } else if (arg === "--delete-session") {
+      deleteSessionRequested = true;
+      const sessionId = args[i + 1];
+      if (sessionId && !sessionId.startsWith("-")) {
+        deleteSessionId = sessionId;
+        i++;
+      }
     } else {
       positional.push(arg);
     }
@@ -80,6 +93,9 @@ export function parseArgs(args: string[]): ParsedArgs {
   if (continueSession && resume) {
     throw new Error("--continue 和 --resume 不能同时使用");
   }
+  if (deleteSessionRequested && (continueSession || resume)) {
+    throw new Error("--delete-session 不能和 --continue 或 --resume 同时使用");
+  }
 
   return {
     help,
@@ -87,9 +103,11 @@ export function parseArgs(args: string[]): ParsedArgs {
     print,
     continueSession,
     resume,
+    deleteSession: deleteSessionRequested,
     model,
     permissionMode,
     resumeId,
+    deleteSessionId,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
   };
 }
@@ -126,13 +144,17 @@ function getSessionPreview(session: SessionData): string {
   return preview.length > 60 ? `${preview.slice(0, 57)}...` : preview;
 }
 
-async function selectSession(sessions: SessionData[]): Promise<SessionData | undefined> {
-  process.stdout.write("可恢复的会话:\n\n");
+function printSessionList(title: string, sessions: SessionData[]): void {
+  process.stdout.write(`${title}\n\n`);
   sessions.forEach((session, index) => {
     process.stdout.write(
       `${index + 1}. ${session.updatedAt} | ${session.model} | ${getSessionPreview(session)}\n`,
     );
   });
+}
+
+async function selectSession(sessions: SessionData[]): Promise<SessionData | undefined> {
+  printSessionList("可恢复的会话:", sessions);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const prompt = `请选择会话 [1-${sessions.length}]，输入 q 取消: `;
@@ -155,6 +177,77 @@ async function selectSession(sessions: SessionData[]): Promise<SessionData | und
       process.stdout.write(
         `请输入 1 到 ${sessions.length} 之间的编号，或输入 q 取消\n`,
       );
+      rl.prompt();
+    }
+    return undefined;
+  } finally {
+    rl.close();
+  }
+}
+
+function isConfirmed(input: string): boolean {
+  const normalized = input.trim().toLowerCase();
+  return normalized === "y" || normalized === "yes";
+}
+
+async function confirmSessionDeletion(id: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  rl.setPrompt(`确定删除会话 ${id}？输入 y/yes 确认，其他输入取消: `);
+  rl.prompt();
+
+  try {
+    for await (const line of rl) {
+      if (isConfirmed(line)) return true;
+      process.stdout.write("已取消\n");
+      return false;
+    }
+    process.stdout.write("已取消\n");
+    return false;
+  } finally {
+    rl.close();
+  }
+}
+
+async function selectSessionToDelete(
+  sessions: SessionData[],
+): Promise<SessionData | undefined> {
+  printSessionList("可删除的会话:", sessions);
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const selectionPrompt = `请选择要删除的会话 [1-${sessions.length}]，输入 q 取消: `;
+  let selected: SessionData | undefined;
+  rl.setPrompt(selectionPrompt);
+  rl.prompt();
+
+  try {
+    for await (const line of rl) {
+      if (selected) {
+        if (isConfirmed(line)) return selected;
+        process.stdout.write("已取消\n");
+        return undefined;
+      }
+
+      const input = line.trim();
+      if (input.toLowerCase() === "q") {
+        process.stdout.write("已取消\n");
+        return undefined;
+      }
+
+      if (/^[1-9]\d*$/.test(input)) {
+        selected = sessions[Number(input) - 1];
+        if (selected) {
+          rl.setPrompt(
+            `确定删除会话 ${selected.id}？输入 y/yes 确认，其他输入取消: `,
+          );
+          rl.prompt();
+          continue;
+        }
+      }
+
+      process.stdout.write(
+        `请输入 1 到 ${sessions.length} 之间的编号，或输入 q 取消\n`,
+      );
+      rl.setPrompt(selectionPrompt);
       rl.prompt();
     }
     return undefined;
@@ -237,6 +330,31 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
 
   if (parsed.permissionMode) {
     process.stderr.write("Warning: --permission-mode 暂未实现权限控制\n");
+  }
+
+  if (parsed.deleteSession) {
+    try {
+      let sessionId: string;
+      if (parsed.deleteSessionId !== undefined) {
+        sessionId = parsed.deleteSessionId;
+        if (!await confirmSessionDeletion(sessionId)) return;
+      } else {
+        const result = listSessions(process.cwd());
+        reportSkippedSessionFiles(result.skippedFiles);
+        if (result.sessions.length === 0) {
+          throw new Error("当前目录没有可删除的会话");
+        }
+        const selectedSession = await selectSessionToDelete(result.sessions);
+        if (!selectedSession) return;
+        sessionId = selectedSession.id;
+      }
+
+      deleteSession(sessionId);
+      process.stdout.write(`已删除会话: ${sessionId}\n`);
+    } catch (error) {
+      reportCliError(error);
+    }
+    return;
   }
 
   let agent: Agent;
