@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   displayToSourcePoint,
+  isRectFullyVisible,
   moveRegion,
   resizeRegion,
 } from "../docs/story/tools/lettering/lib/layout.mjs";
@@ -12,6 +13,21 @@ const minimum = { width: 40, height: 40 };
 
 test("displayToSourcePoint converts display pixels using scale", () => {
   assert.deepEqual(displayToSourcePoint({ x: 25, y: 50 }, 0.5), { x: 50, y: 100 });
+});
+
+test("isRectFullyVisible excludes the sticky-toolbar occlusion", () => {
+  const viewport = { top: 64, right: 1290, bottom: 862, left: 214 };
+
+  assert.equal(isRectFullyVisible(
+    { top: 100, right: 500, bottom: 180, left: 400 },
+    viewport,
+    { margin: 24, occludedTop: 134 },
+  ), false);
+  assert.equal(isRectFullyVisible(
+    { top: 158, right: 500, bottom: 238, left: 400 },
+    viewport,
+    { margin: 24, occludedTop: 134 },
+  ), true);
 });
 test("moveRegion converts display delta and clamps to source bounds", () => {
   const moved = moveRegion({ x: 800, y: 1780, width: 60, height: 40 }, { x: 20, y: 20 }, source, 0.5);

@@ -13,6 +13,16 @@ export function displayToSourcePoint(point, scale) {
   };
 }
 
+export function isRectFullyVisible(rect, viewport, { margin = 0, occludedTop = viewport.top } = {}) {
+  const visibleTop = Math.max(viewport.top, occludedTop) + margin;
+  return (
+    rect.top >= visibleTop &&
+    rect.right <= viewport.right - margin &&
+    rect.bottom <= viewport.bottom - margin &&
+    rect.left >= viewport.left + margin
+  );
+}
+
 export function moveRegion(region, displayDelta, source, scale = 1) {
   const delta = displayToSourcePoint(displayDelta, scale);
   return {

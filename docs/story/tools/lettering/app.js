@@ -1,4 +1,4 @@
-import { moveRegion, resizeRegion } from "/lib/layout.mjs";
+import { isRectFullyVisible, moveRegion, resizeRegion } from "/lib/layout.mjs";
 import { fitText, layoutText } from "/lib/text-fit.mjs";
 import { drawLettering, renderPageBlob } from "/lib/canvas-export.mjs";
 
@@ -9,7 +9,7 @@ const page = query.get("page") || "01";
 const apiRoot = `/api/pages/${chapter}/${page}`;
 const refs = Object.fromEntries([
   "saveStatus", "checkOverflow", "exportPng", "exportWebp", "pageThumb", "pageTitle", "pageMeta",
-  "itemCount", "autoFit", "toggleGuides", "zoomLabel", "pageFrame", "pageCanvas", "baseImage", "letteringPreview",
+  "itemCount", "autoFit", "toggleGuides", "zoomLabel", "stageWrap", "stageToolbar", "pageFrame", "pageCanvas", "baseImage", "letteringPreview",
   "letteringLayer", "dialogueList", "textValue", "directionHorizontal", "directionVertical",
   "fontSize", "fontSizeValue", "padding", "paddingValue", "geometry", "validationStatus", "toast",
 ].map((id) => [id, document.getElementById(id)]));
@@ -144,10 +144,26 @@ function renderAll() {
   renderInspector();
 }
 
+function revealSelectedRegion() {
+  const region = refs.letteringLayer.querySelector(`[data-item-id="${CSS.escape(selectedId)}"]`);
+  if (!region) return;
+  const stageBounds = refs.stageWrap.getBoundingClientRect();
+  const toolbarBounds = refs.stageToolbar.getBoundingClientRect();
+  const regionBounds = region.getBoundingClientRect();
+  const fullyVisible = isRectFullyVisible(regionBounds, stageBounds, {
+    margin: 24,
+    occludedTop: toolbarBounds.bottom,
+  });
+  if (!fullyVisible) {
+    region.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+  }
+}
+
 function selectItem(id) {
   if (selectedId === id) return;
   selectedId = id;
   renderAll();
+  revealSelectedRegion();
 }
 
 function updateScale() {

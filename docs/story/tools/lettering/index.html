@@ -36,8 +36,8 @@
           <div class="hint-card">拖动文字框移动位置；拖动边缘与四角的控制点改变区块大小。所有坐标都按原图像素保存。</div>
         </aside>
 
-        <section class="stage-wrap">
-          <div class="stage-toolbar">
+        <section class="stage-wrap" id="stageWrap">
+          <div class="stage-toolbar" id="stageToolbar">
             <span>原图坐标</span>
             <button id="autoFit" class="tool-button">自动适配</button>
             <button id="toggleGuides" class="tool-button active">显示边界</button>
@@ -53,8 +53,10 @@
         </section>
 
         <aside class="sidebar inspector-sidebar">
-          <p class="eyebrow">台词</p>
-          <div id="dialogueList" class="dialogue-list"></div>
+          <section class="dialogue-pane">
+            <p class="eyebrow">台词</p>
+            <div id="dialogueList" class="dialogue-list"></div>
+          </section>
 
           <section class="inspector" id="inspector">
             <p class="eyebrow">选中样式</p>
