@@ -19,6 +19,10 @@ import test from "node:test";
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = resolve(projectRoot, "src", "cli.ts");
 const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+const olderSessionId = "550e8400-e29b-41d4-a716-446655440001";
+const latestSessionId = "550e8400-e29b-41d4-a716-446655440002";
+const otherProjectSessionId = "550e8400-e29b-41d4-a716-446655440003";
+const damagedSessionId = "550e8400-e29b-41d4-a716-446655440004";
 
 test("--help 和 -h 显示 CLI 帮助后退出", () => {
   for (const option of ["--help", "-h"]) {
@@ -253,6 +257,98 @@ test("--resume 缺少会话 ID 时直接报错", async () => {
   assert.equal(result.stderr, "Error: --resume 需要会话 ID\n");
 });
 
+test("--continue 和 -c 恢复当前目录最近的会话", async () => {
+  for (const option of ["--continue", "-c"]) {
+    const olderSession = createStoredSession({
+      id: olderSessionId,
+      updatedAt: "2026-07-14T08:05:00.000Z",
+      messages: [
+        { role: "user", content: "older question" },
+        { role: "assistant", content: [{ type: "text", text: "older answer" }] },
+      ],
+    });
+    const latestSession = createStoredSession({
+      id: latestSessionId,
+      model: "latest-model",
+      createdAt: "2026-07-14T09:00:00.000Z",
+      updatedAt: "2026-07-14T09:05:00.000Z",
+      messages: [
+        { role: "user", content: "latest question" },
+        { role: "assistant", content: [{ type: "text", text: "latest answer" }] },
+      ],
+    });
+    const otherProjectSession = createStoredSession({
+      id: otherProjectSessionId,
+      cwd: "/other/project",
+      updatedAt: "2026-07-14T10:05:00.000Z",
+    });
+
+    const result = await captureCliRequest(
+      ["--print", option, "new question"],
+      "",
+      {
+        initialSessions: [
+          { id: olderSessionId, contents: olderSession },
+          { id: latestSessionId, contents: latestSession },
+          { id: otherProjectSessionId, contents: otherProjectSession },
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.requests.length, 1);
+    assert.equal(result.requests[0].model, "latest-model");
+    assert.equal(result.requests[0].messages[0].content, "latest question");
+    assert.equal(result.requests[0].messages.at(-1).content, "new question");
+
+    const saved = result.sessions.find(({ filename }) => (
+      filename === `${latestSessionId}.json`
+    ));
+    assert.ok(saved);
+    assert.equal(saved.data.id, latestSessionId);
+    assert.equal(saved.data.createdAt, latestSession.createdAt);
+    assert.equal(saved.data.messages.length, 4);
+  }
+});
+
+test("--continue 在当前目录没有会话时明确报错", async () => {
+  const result = await captureCliRequest(["--continue"]);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.stderr, "Error: 当前目录没有可恢复的会话\n");
+});
+
+test("--continue 跳过损坏的会话文件并显示警告", async () => {
+  const validSession = createStoredSession({ id: latestSessionId });
+  const result = await captureCliRequest(
+    ["--print", "--continue", "new question"],
+    "",
+    {
+      initialSessions: [
+        { id: damagedSessionId, contents: "{not-json" },
+        { id: latestSessionId, contents: validSession },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 1);
+  assert.equal(
+    result.stderr,
+    `Warning: 跳过损坏的会话文件: ${damagedSessionId}.json\n`,
+  );
+});
+
+test("--continue 和 --resume 不能同时使用", async () => {
+  const result = await captureCliRequest(["--continue", "--resume", sessionId]);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.stderr, "Error: --continue 和 --resume 不能同时使用\n");
+});
+
 test("会话保存失败时警告但不中断后续对话", async () => {
   const result = await captureCliRequest(
     [],
@@ -286,6 +382,13 @@ async function captureCliRequest(args, stdin = "", options = {}) {
       ? options.initialSession
       : JSON.stringify(options.initialSession, null, 2);
     writeFileSync(join(sessionDir, `${id}.json`), contents);
+  }
+  for (const sessionFile of options.initialSessions ?? []) {
+    mkdirSync(sessionDir, { recursive: true });
+    const contents = typeof sessionFile.contents === "string"
+      ? sessionFile.contents
+      : JSON.stringify(sessionFile.contents, null, 2);
+    writeFileSync(join(sessionDir, `${sessionFile.id}.json`), contents);
   }
 
   const server = createServer((req, res) => {

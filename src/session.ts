@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,11 @@ export type SessionData = {
   createdAt: string;
   updatedAt: string;
   messages: Message[];
+};
+
+export type LatestSessionResult = {
+  session?: SessionData;
+  skippedFiles: string[];
 };
 
 const SESSION_DIR = join(homedir(), ".mo-code", "sessions");
@@ -62,4 +67,47 @@ export function loadSession(id: string): SessionData {
   } catch {
     throw new Error(`会话文件已损坏: ${id}`);
   }
+}
+
+export function findLatestSession(cwd: string): LatestSessionResult {
+  let filenames: string[];
+  try {
+    filenames = readdirSync(SESSION_DIR);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { session: undefined, skippedFiles: [] };
+    }
+    throw error;
+  }
+
+  let latestSession: SessionData | undefined;
+  const skippedFiles: string[] = [];
+
+  for (const filename of filenames) {
+    if (!filename.endsWith(".json")) continue;
+
+    const id = filename.slice(0, -".json".length);
+    if (!SESSION_ID_PATTERN.test(id)) continue;
+
+    let session: SessionData;
+    try {
+      session = loadSession(id);
+    } catch {
+      skippedFiles.push(filename);
+      continue;
+    }
+
+    if (session.cwd !== cwd) continue;
+    if (typeof session.updatedAt !== "string") {
+      skippedFiles.push(filename);
+      continue;
+    }
+
+    // updatedAt 由 Date.toISOString() 生成，同一格式的字符串可直接比较先后。
+    if (!latestSession || session.updatedAt > latestSession.updatedAt) {
+      latestSession = session;
+    }
+  }
+
+  return { session: latestSession, skippedFiles };
 }

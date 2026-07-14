@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { Agent } from "./agent-loop.ts";
 import {
   createSession,
+  findLatestSession,
   loadSession,
   saveSession,
   type SessionData,
@@ -30,6 +31,7 @@ type ParsedArgs = {
   help: boolean;
   version: boolean;
   print: boolean;
+  continueSession: boolean;
   model?: string;
   permissionMode?: string;
   resume?: string;
@@ -40,6 +42,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   let help = false;
   let version = false;
   let print = false;
+  let continueSession = false;
   let model: string | undefined;
   let permissionMode: string | undefined;
   let resume: string | undefined;
@@ -53,6 +56,8 @@ export function parseArgs(args: string[]): ParsedArgs {
       version = true;
     } else if (arg === "--print" || arg === "-p") {
       print = true;
+    } else if (arg === "--continue" || arg === "-c") {
+      continueSession = true;
     } else if (arg === "--model" || arg === "-m") {
       model = args[++i];
     } else if (arg === "--permission-mode") {
@@ -68,10 +73,15 @@ export function parseArgs(args: string[]): ParsedArgs {
     }
   }
 
+  if (continueSession && resume) {
+    throw new Error("--continue 和 --resume 不能同时使用");
+  }
+
   return {
     help,
     version,
     print,
+    continueSession,
     model,
     permissionMode,
     resume,
@@ -160,9 +170,20 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   let agent: Agent;
   let session: SessionData;
 
-  if (parsed.resume) {
+  if (parsed.resume || parsed.continueSession) {
     try {
-      session = loadSession(parsed.resume);
+      if (parsed.resume) {
+        session = loadSession(parsed.resume);
+      } else {
+        const result = findLatestSession(process.cwd());
+        for (const filename of result.skippedFiles) {
+          process.stderr.write(`Warning: 跳过损坏的会话文件: ${filename}\n`);
+        }
+        if (!result.session) {
+          throw new Error("当前目录没有可恢复的会话");
+        }
+        session = result.session;
+      }
     } catch (error) {
       reportCliError(error);
       return;
