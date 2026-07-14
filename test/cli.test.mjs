@@ -18,6 +18,7 @@ import test from "node:test";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = resolve(projectRoot, "src", "cli.ts");
+const sessionId = "550e8400-e29b-41d4-a716-446655440000";
 
 test("--help 和 -h 显示 CLI 帮助后退出", () => {
   for (const option of ["--help", "-h"]) {
@@ -191,6 +192,67 @@ test("会话 JSON 保存完整的 tool_use 和 tool_result", async () => {
   assert.deepEqual(messages.at(-1).content, [{ type: "text", text: "done" }]);
 });
 
+test("--resume 和 -r 恢复指定会话并继续写入原文件", async () => {
+  for (const option of ["--resume", "-r"]) {
+    const initialSession = createStoredSession();
+    const result = await captureCliRequest(
+      [option, sessionId, "new question"],
+      "",
+      { initialSession },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.requests.length, 1);
+    assert.equal(result.requests[0].model, "saved-model");
+    assert.equal(result.requests[0].messages[0].content, "old question");
+    assert.equal(result.requests[0].messages.at(-1).content, "new question");
+    assert.equal(result.sessions.length, 1);
+    assert.equal(result.sessions[0].filename, `${sessionId}.json`);
+    assert.equal(result.sessions[0].data.id, sessionId);
+    assert.equal(result.sessions[0].data.createdAt, initialSession.createdAt);
+    assert.equal(result.sessions[0].data.messages.length, 4);
+  }
+});
+
+test("--resume 在工作目录不一致时拒绝恢复并给出说明", async () => {
+  const initialSession = createStoredSession({ cwd: "/other/project" });
+  const result = await captureCliRequest(
+    ["--resume", sessionId],
+    "",
+    { initialSession },
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stderr, /属于另一个工作目录/);
+  assert.match(result.stderr, /会话目录: \/other\/project/);
+  assert.match(result.stderr, /请切换到会话目录后重新运行 mo-code --resume/);
+});
+
+test("--resume 对不存在和损坏的会话给出明确错误", async () => {
+  const missing = await captureCliRequest(["--resume", sessionId]);
+  assert.equal(missing.status, 1);
+  assert.equal(missing.requests.length, 0);
+  assert.equal(missing.stderr, `Error: 找不到会话: ${sessionId}\n`);
+
+  const damaged = await captureCliRequest(
+    ["--resume", sessionId],
+    "",
+    { initialSession: "{not-json", initialSessionId: sessionId },
+  );
+  assert.equal(damaged.status, 1);
+  assert.equal(damaged.requests.length, 0);
+  assert.equal(damaged.stderr, `Error: 会话文件已损坏: ${sessionId}\n`);
+});
+
+test("--resume 缺少会话 ID 时直接报错", async () => {
+  const result = await captureCliRequest(["--resume"]);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.stderr, "Error: --resume 需要会话 ID\n");
+});
+
 test("会话保存失败时警告但不中断后续对话", async () => {
   const result = await captureCliRequest(
     [],
@@ -215,6 +277,15 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     writeFileSync(home, "not a directory");
   } else {
     mkdirSync(home);
+  }
+  const sessionDir = join(home, ".mo-code", "sessions");
+  if (options.initialSession !== undefined) {
+    mkdirSync(sessionDir, { recursive: true });
+    const id = options.initialSessionId ?? options.initialSession.id;
+    const contents = typeof options.initialSession === "string"
+      ? options.initialSession
+      : JSON.stringify(options.initialSession, null, 2);
+    writeFileSync(join(sessionDir, `${id}.json`), contents);
   }
 
   const server = createServer((req, res) => {
@@ -269,12 +340,17 @@ async function captureCliRequest(args, stdin = "", options = {}) {
       child.on("close", resolve);
     });
 
-    const sessionDir = join(home, ".mo-code", "sessions");
     const sessions = existsSync(sessionDir)
-      ? readdirSync(sessionDir).map((filename) => ({
-          filename,
-          data: JSON.parse(readFileSync(join(sessionDir, filename), "utf-8")),
-        }))
+      ? readdirSync(sessionDir).map((filename) => {
+          const raw = readFileSync(join(sessionDir, filename), "utf-8");
+          let data;
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            data = undefined;
+          }
+          return { filename, data, raw };
+        })
       : [];
 
     return { status, stdout, stderr, requests, sessions };
@@ -284,4 +360,23 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     });
     rmSync(testRoot, { recursive: true, force: true });
   }
+}
+
+function createStoredSession(overrides = {}) {
+  return {
+    version: 1,
+    id: sessionId,
+    cwd: projectRoot,
+    model: "saved-model",
+    createdAt: "2026-07-14T08:00:00.000Z",
+    updatedAt: "2026-07-14T08:05:00.000Z",
+    messages: [
+      { role: "user", content: "old question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old answer" }],
+      },
+    ],
+    ...overrides,
+  };
 }

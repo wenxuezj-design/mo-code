@@ -101,6 +101,10 @@ export class Agent {
     return this.model;
   }
 
+  restoreMessages(messages: Message[]): void {
+    this.messages = structuredClone(messages);
+  }
+
   async chat(userText: string): Promise<void> {
     const isFirstTurn = this.messages.length === 0;
     if (isFirstTurn) {

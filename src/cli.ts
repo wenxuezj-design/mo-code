@@ -3,7 +3,12 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 import { Agent } from "./agent-loop.ts";
-import { createSession, saveSession, type SessionData } from "./session.ts";
+import {
+  createSession,
+  loadSession,
+  saveSession,
+  type SessionData,
+} from "./session.ts";
 
 export const HELP_TEXT = `Usage: mo-code [options] [prompt...]
 
@@ -12,7 +17,7 @@ Options:
   -v, --version                      显示当前版本
   -p, --print                        执行非交互任务后退出
   -c, --continue                     继续当前项目最近的会话
-  -r, --resume <session>             恢复指定 ID 或名称的会话
+  -r, --resume <id>                  恢复指定 ID 的会话
   -m, --model <model>                设置本次会话使用的模型
       --permission-mode <mode>       设置权限模式
       --dangerously-skip-permissions 跳过权限检查，仅用于隔离环境
@@ -27,6 +32,7 @@ type ParsedArgs = {
   print: boolean;
   model?: string;
   permissionMode?: string;
+  resume?: string;
   prompt?: string;
 };
 
@@ -36,6 +42,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   let print = false;
   let model: string | undefined;
   let permissionMode: string | undefined;
+  let resume: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -50,6 +57,12 @@ export function parseArgs(args: string[]): ParsedArgs {
       model = args[++i];
     } else if (arg === "--permission-mode") {
       permissionMode = args[++i];
+    } else if (arg === "--resume" || arg === "-r") {
+      const sessionId = args[++i];
+      if (!sessionId || sessionId.startsWith("-")) {
+        throw new Error(`${arg} 需要会话 ID`);
+      }
+      resume = sessionId;
     } else {
       positional.push(arg);
     }
@@ -61,6 +74,7 @@ export function parseArgs(args: string[]): ParsedArgs {
     print,
     model,
     permissionMode,
+    resume,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
   };
 }
@@ -114,8 +128,20 @@ async function runRepl(
   rl.close();
 }
 
+function reportCliError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`Error: ${message}\n`);
+  process.exitCode = 1;
+}
+
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
-  const parsed = parseArgs(args);
+  let parsed: ParsedArgs;
+  try {
+    parsed = parseArgs(args);
+  } catch (error) {
+    reportCliError(error);
+    return;
+  }
 
   if (parsed.help) {
     process.stdout.write(HELP_TEXT);
@@ -131,8 +157,37 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     process.stderr.write("Warning: --permission-mode 暂未实现权限控制\n");
   }
 
-  const agent = new Agent({ model: parsed.model });
-  const session = createSession(process.cwd(), agent.getModel());
+  let agent: Agent;
+  let session: SessionData;
+
+  if (parsed.resume) {
+    try {
+      session = loadSession(parsed.resume);
+    } catch (error) {
+      reportCliError(error);
+      return;
+    }
+
+    // 当前版本要求回到原工作目录，避免旧会话上下文操作到其他项目。
+    // Claude Code 对同仓库 worktree 有更灵活的处理，后续再扩展。
+    if (session.cwd !== process.cwd()) {
+      process.stderr.write(
+        `Error: 会话 ${session.id} 属于另一个工作目录\n`
+        + `  会话目录: ${session.cwd}\n`
+        + `  当前目录: ${process.cwd()}\n`
+        + `请切换到会话目录后重新运行 mo-code --resume ${session.id}\n`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    agent = new Agent({ model: parsed.model ?? session.model });
+    agent.restoreMessages(session.messages);
+    session.model = agent.getModel();
+  } else {
+    agent = new Agent({ model: parsed.model });
+    session = createSession(process.cwd(), agent.getModel());
+  }
 
   if (parsed.print) {
     if (parsed.prompt) await chatAndSave(agent, session, parsed.prompt);
