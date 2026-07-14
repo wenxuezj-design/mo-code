@@ -27,6 +27,11 @@ export type LatestSessionResult = {
   skippedFiles: string[];
 };
 
+export type SessionListResult = {
+  sessions: SessionData[];
+  skippedFiles: string[];
+};
+
 type SessionRecord = {
   type: "session";
   version: 1;
@@ -145,18 +150,18 @@ export function loadSession(id: string): SessionData {
   };
 }
 
-export function findLatestSession(cwd: string): LatestSessionResult {
+export function listSessions(cwd: string): SessionListResult {
   let filenames: string[];
   try {
     filenames = readdirSync(SESSION_DIR);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { session: undefined, skippedFiles: [] };
+      return { sessions: [], skippedFiles: [] };
     }
     throw error;
   }
 
-  let latestSession: SessionData | undefined;
+  const sessions: SessionData[] = [];
   const skippedFiles: string[] = [];
 
   for (const filename of filenames) {
@@ -174,18 +179,17 @@ export function findLatestSession(cwd: string): LatestSessionResult {
     }
 
     if (session.cwd !== cwd) continue;
-    if (typeof session.updatedAt !== "string") {
-      skippedFiles.push(filename);
-      continue;
-    }
-
-    // updatedAt 由 Date.toISOString() 生成，同一格式的字符串可直接比较先后。
-    if (!latestSession || session.updatedAt > latestSession.updatedAt) {
-      latestSession = session;
-    }
+    sessions.push(session);
   }
 
-  return { session: latestSession, skippedFiles };
+  // updatedAt 由 Date.toISOString() 生成，同一格式的字符串可直接比较先后。
+  sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { sessions, skippedFiles };
+}
+
+export function findLatestSession(cwd: string): LatestSessionResult {
+  const { sessions, skippedFiles } = listSessions(cwd);
+  return { session: sessions[0], skippedFiles };
 }
 
 function isSessionRecord(value: unknown, expectedId: string): value is SessionRecord {

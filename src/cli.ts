@@ -7,6 +7,7 @@ import {
   appendSessionTurn,
   createSession,
   findLatestSession,
+  listSessions,
   loadSession,
   type SessionData,
 } from "./session.ts";
@@ -18,7 +19,7 @@ Options:
   -v, --version                      显示当前版本
   -p, --print                        执行非交互任务后退出
   -c, --continue                     继续当前项目最近的会话
-  -r, --resume <id>                  恢复指定 ID 的会话
+  -r, --resume [id]                  恢复指定会话；未提供 ID 时从列表选择
   -m, --model <model>                设置本次会话使用的模型
       --permission-mode <mode>       设置权限模式
       --dangerously-skip-permissions 跳过权限检查，仅用于隔离环境
@@ -32,9 +33,10 @@ type ParsedArgs = {
   version: boolean;
   print: boolean;
   continueSession: boolean;
+  resume: boolean;
   model?: string;
   permissionMode?: string;
-  resume?: string;
+  resumeId?: string;
   prompt?: string;
 };
 
@@ -43,9 +45,10 @@ export function parseArgs(args: string[]): ParsedArgs {
   let version = false;
   let print = false;
   let continueSession = false;
+  let resume = false;
   let model: string | undefined;
   let permissionMode: string | undefined;
-  let resume: string | undefined;
+  let resumeId: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -63,11 +66,12 @@ export function parseArgs(args: string[]): ParsedArgs {
     } else if (arg === "--permission-mode") {
       permissionMode = args[++i];
     } else if (arg === "--resume" || arg === "-r") {
-      const sessionId = args[++i];
-      if (!sessionId || sessionId.startsWith("-")) {
-        throw new Error(`${arg} 需要会话 ID`);
+      resume = true;
+      const sessionId = args[i + 1];
+      if (sessionId && !sessionId.startsWith("-")) {
+        resumeId = sessionId;
+        i++;
       }
-      resume = sessionId;
     } else {
       positional.push(arg);
     }
@@ -82,9 +86,10 @@ export function parseArgs(args: string[]): ParsedArgs {
     version,
     print,
     continueSession,
+    resume,
     model,
     permissionMode,
-    resume,
+    resumeId,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
   };
 }
@@ -99,6 +104,69 @@ function getVersion(): string {
   }
 
   return packageJson.version;
+}
+
+function getSessionPreview(session: SessionData): string {
+  const firstUserMessage = session.messages.find((message) => message.role === "user");
+  if (!firstUserMessage) return "(无消息)";
+
+  let text: string;
+  if (typeof firstUserMessage.content === "string") {
+    text = firstUserMessage.content;
+  } else {
+    // 第一条用户消息可能先放项目上下文，最后一个 text block 才是用户输入。
+    const lastTextBlock = [...firstUserMessage.content]
+      .reverse()
+      .find((block) => block.type === "text");
+    text = lastTextBlock?.type === "text" ? lastTextBlock.text : "";
+  }
+
+  const preview = text.replace(/\s+/g, " ").trim();
+  if (!preview) return "(无文本)";
+  return preview.length > 60 ? `${preview.slice(0, 57)}...` : preview;
+}
+
+async function selectSession(sessions: SessionData[]): Promise<SessionData | undefined> {
+  process.stdout.write("可恢复的会话:\n\n");
+  sessions.forEach((session, index) => {
+    process.stdout.write(
+      `${index + 1}. ${session.updatedAt} | ${session.model} | ${getSessionPreview(session)}\n`,
+    );
+  });
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const prompt = `请选择会话 [1-${sessions.length}]，输入 q 取消: `;
+  rl.setPrompt(prompt);
+  rl.prompt();
+
+  try {
+    for await (const line of rl) {
+      const input = line.trim();
+      if (input.toLowerCase() === "q") {
+        process.stdout.write("已取消\n");
+        return undefined;
+      }
+
+      if (/^[1-9]\d*$/.test(input)) {
+        const selected = sessions[Number(input) - 1];
+        if (selected) return selected;
+      }
+
+      process.stdout.write(
+        `请输入 1 到 ${sessions.length} 之间的编号，或输入 q 取消\n`,
+      );
+      rl.prompt();
+    }
+    return undefined;
+  } finally {
+    rl.close();
+  }
+}
+
+function reportSkippedSessionFiles(filenames: string[]): void {
+  for (const filename of filenames) {
+    process.stderr.write(`Warning: 跳过损坏的会话文件: ${filename}\n`);
+  }
 }
 
 function saveAgentTurn(agent: Agent, session: SessionData): void {
@@ -176,13 +244,20 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
 
   if (parsed.resume || parsed.continueSession) {
     try {
-      if (parsed.resume) {
-        session = loadSession(parsed.resume);
+      if (parsed.resumeId !== undefined) {
+        session = loadSession(parsed.resumeId);
+      } else if (parsed.resume) {
+        const result = listSessions(process.cwd());
+        reportSkippedSessionFiles(result.skippedFiles);
+        if (result.sessions.length === 0) {
+          throw new Error("当前目录没有可恢复的会话");
+        }
+        const selectedSession = await selectSession(result.sessions);
+        if (!selectedSession) return;
+        session = selectedSession;
       } else {
         const result = findLatestSession(process.cwd());
-        for (const filename of result.skippedFiles) {
-          process.stderr.write(`Warning: 跳过损坏的会话文件: ${filename}\n`);
-        }
+        reportSkippedSessionFiles(result.skippedFiles);
         if (!result.session) {
           throw new Error("当前目录没有可恢复的会话");
         }

@@ -38,6 +38,7 @@ test("--help 和 -h 显示 CLI 帮助后退出", () => {
     assert.match(result.stdout, /-h, --help/);
     assert.match(result.stdout, /-v, --version/);
     assert.match(result.stdout, /-p, --print/);
+    assert.match(result.stdout, /-r, --resume \[id\]/);
     assert.match(result.stdout, /--mortis/);
     assert.match(result.stdout, /--max-budget-usd <amount>/);
   }
@@ -314,12 +315,82 @@ test("--resume 对不存在和损坏的会话给出明确错误", async () => {
   assert.equal(damaged.stderr, `Error: 会话文件已损坏: ${sessionId}\n`);
 });
 
-test("--resume 缺少会话 ID 时直接报错", async () => {
+test("--resume 未提供 ID 时列出当前目录会话并按编号恢复", async () => {
+  const olderSession = createStoredSession({
+    id: olderSessionId,
+    updatedAt: "2026-07-14T08:05:00.000Z",
+    messages: [
+      { role: "user", content: "older question" },
+      { role: "assistant", content: [{ type: "text", text: "older answer" }] },
+    ],
+  });
+  const latestSession = createStoredSession({
+    id: latestSessionId,
+    model: "latest-model",
+    updatedAt: "2026-07-14T09:05:00.000Z",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "context reminder" },
+          { type: "text", text: "latest question" },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "latest answer" }] },
+    ],
+  });
+  const result = await captureCliRequest(
+    ["--resume", "--print", "new question"],
+    "2\n",
+    {
+      initialSessions: [
+        { id: olderSessionId, contents: olderSession },
+        { id: latestSessionId, contents: latestSession },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /1\. .*latest-model.*latest question/);
+  assert.match(result.stdout, /2\. .*saved-model.*older question/);
+  assert.doesNotMatch(result.stdout, /context reminder/);
+  assert.equal(result.requests.length, 1);
+  assert.equal(result.requests[0].messages[0].content, "older question");
+  assert.equal(result.requests[0].messages.at(-1).content, "new question");
+});
+
+test("--resume 会话选择器输入 q 时取消恢复", async () => {
+  const result = await captureCliRequest(
+    ["--resume"],
+    "q\n",
+    { initialSession: createStoredSession() },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /已取消/);
+});
+
+test("--resume 会话选择器对无效编号重新提示", async () => {
+  const result = await captureCliRequest(
+    ["--resume", "--print", "new question"],
+    "0\n1\n",
+    { initialSession: createStoredSession() },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 1);
+  assert.match(result.stdout, /请输入 1 到 1 之间的编号，或输入 q 取消/);
+});
+
+test("--resume 未提供 ID 且当前目录没有会话时明确报错", async () => {
   const result = await captureCliRequest(["--resume"]);
 
   assert.equal(result.status, 1);
   assert.equal(result.requests.length, 0);
-  assert.equal(result.stderr, "Error: --resume 需要会话 ID\n");
+  assert.equal(result.stderr, "Error: 当前目录没有可恢复的会话\n");
 });
 
 test("--continue 和 -c 恢复当前目录最近的会话", async () => {
