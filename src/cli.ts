@@ -4,10 +4,10 @@ import { pathToFileURL } from "node:url";
 
 import { Agent } from "./agent-loop.ts";
 import {
+  appendSessionTurn,
   createSession,
   findLatestSession,
   loadSession,
-  saveSession,
   type SessionData,
 } from "./session.ts";
 
@@ -101,11 +101,15 @@ function getVersion(): string {
   return packageJson.version;
 }
 
-function saveAgentSession(agent: Agent, session: SessionData): void {
-  session.messages = agent.getMessages();
+function saveAgentTurn(agent: Agent, session: SessionData): void {
+  const messages = agent.getMessages();
+  // session.messages 保存的是上一次成功完成 chat 时的快照，用它切出本轮新增消息。
+  const turnMessages = messages.slice(session.messages.length);
+  session.messages = messages;
+  session.model = agent.getModel();
 
   try {
-    saveSession(session);
+    appendSessionTurn(session, turnMessages);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Warning: 会话保存失败: ${message}\n`);
@@ -114,7 +118,7 @@ function saveAgentSession(agent: Agent, session: SessionData): void {
 
 async function chatAndSave(agent: Agent, session: SessionData, input: string): Promise<void> {
   await agent.chat(input);
-  saveAgentSession(agent, session);
+  saveAgentTurn(agent, session);
 }
 
 async function runRepl(

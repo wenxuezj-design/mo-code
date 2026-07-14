@@ -137,19 +137,19 @@ test("无参数时不执行默认任务", async () => {
   assert.equal(result.requests.length, 0);
 });
 
-test("新会话使用 UUID，并在每轮完成后覆盖同一个 JSON 文件", async () => {
+test("新会话使用 UUID，并在每轮完成后向同一个 JSONL 文件追加 turn", async () => {
   const result = await captureCliRequest([], "first\nsecond\n/exit\n");
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.requests.length, 2);
   assert.equal(result.sessions.length, 1);
 
-  const [{ filename, data: session }] = result.sessions;
+  const [{ filename, data: session, records }] = result.sessions;
   assert.match(
     session.id,
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   );
-  assert.equal(filename, `${session.id}.json`);
+  assert.equal(filename, `${session.id}.jsonl`);
   assert.equal(session.version, 1);
   assert.equal(session.cwd, projectRoot);
   assert.equal(session.model, "mock");
@@ -157,9 +157,13 @@ test("新会话使用 UUID，并在每轮完成后覆盖同一个 JSON 文件", 
   assert.equal(session.messages.at(-2).content, "second");
   assert.ok(Date.parse(session.createdAt));
   assert.ok(Date.parse(session.updatedAt));
+  assert.deepEqual(records.map(({ type }) => type), ["session", "turn", "turn"]);
+  assert.equal(records[1].messages.length, 2);
+  assert.equal(records[2].messages.length, 2);
+  assert.equal(records[2].messages[0].content, "second");
 });
 
-test("会话 JSON 保存完整的 tool_use 和 tool_result", async () => {
+test("会话 JSONL 的 turn 保存完整的 tool_use 和 tool_result", async () => {
   const result = await captureCliRequest(
     ["--print", "read package.json"],
     "",
@@ -211,11 +215,72 @@ test("--resume 和 -r 恢复指定会话并继续写入原文件", async () => {
     assert.equal(result.requests[0].messages[0].content, "old question");
     assert.equal(result.requests[0].messages.at(-1).content, "new question");
     assert.equal(result.sessions.length, 1);
-    assert.equal(result.sessions[0].filename, `${sessionId}.json`);
+    assert.equal(result.sessions[0].filename, `${sessionId}.jsonl`);
     assert.equal(result.sessions[0].data.id, sessionId);
     assert.equal(result.sessions[0].data.createdAt, initialSession.createdAt);
     assert.equal(result.sessions[0].data.messages.length, 4);
+    assert.deepEqual(
+      result.sessions[0].records.map(({ type }) => type),
+      ["session", "turn", "turn"],
+    );
   }
+});
+
+test("--resume 忽略并移除 JSONL 末尾残缺行后继续追加", async () => {
+  const partialLine = '{"type":"turn","timestamp":"broken"';
+  const initialSession = `${serializeStoredSession(createStoredSession())}${partialLine}`;
+  const result = await captureCliRequest(
+    ["--print", "--resume", sessionId, "new question"],
+    "",
+    { initialSession, initialSessionId: sessionId },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 1);
+  assert.equal(result.sessions.length, 1);
+  assert.equal(result.sessions[0].data.messages.length, 4);
+  assert.deepEqual(
+    result.sessions[0].records.map(({ type }) => type),
+    ["session", "turn", "turn"],
+  );
+  assert.equal(result.sessions[0].raw.includes(partialLine), false);
+});
+
+test("--resume 遇到 JSONL 文件中间损坏时明确报错", async () => {
+  const [header, turn] = serializeStoredSession(createStoredSession()).trimEnd().split("\n");
+  const initialSession = `${header}\n{not-json\n${turn}\n`;
+  const result = await captureCliRequest(
+    ["--resume", sessionId],
+    "",
+    { initialSession, initialSessionId: sessionId },
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.stderr, `Error: 会话文件已损坏: ${sessionId}\n`);
+});
+
+test("--resume 校验 JSONL 记录结构", async () => {
+  const [header] = serializeStoredSession(createStoredSession()).trimEnd().split("\n");
+  const invalidTurn = JSON.stringify({
+    type: "turn",
+    timestamp: "2026-07-14T08:05:00.000Z",
+    model: "saved-model",
+    messages: "not-an-array",
+  });
+  const result = await captureCliRequest(
+    ["--resume", sessionId],
+    "",
+    {
+      initialSession: `${header}\n${invalidTurn}\n`,
+      initialSessionId: sessionId,
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.stderr, `Error: 会话文件已损坏: ${sessionId}\n`);
 });
 
 test("--resume 在工作目录不一致时拒绝恢复并给出说明", async () => {
@@ -303,7 +368,7 @@ test("--continue 和 -c 恢复当前目录最近的会话", async () => {
     assert.equal(result.requests[0].messages.at(-1).content, "new question");
 
     const saved = result.sessions.find(({ filename }) => (
-      filename === `${latestSessionId}.json`
+      filename === `${latestSessionId}.jsonl`
     ));
     assert.ok(saved);
     assert.equal(saved.data.id, latestSessionId);
@@ -337,7 +402,7 @@ test("--continue 跳过损坏的会话文件并显示警告", async () => {
   assert.equal(result.requests.length, 1);
   assert.equal(
     result.stderr,
-    `Warning: 跳过损坏的会话文件: ${damagedSessionId}.json\n`,
+    `Warning: 跳过损坏的会话文件: ${damagedSessionId}.jsonl\n`,
   );
 });
 
@@ -380,15 +445,15 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     const id = options.initialSessionId ?? options.initialSession.id;
     const contents = typeof options.initialSession === "string"
       ? options.initialSession
-      : JSON.stringify(options.initialSession, null, 2);
-    writeFileSync(join(sessionDir, `${id}.json`), contents);
+      : serializeStoredSession(options.initialSession);
+    writeFileSync(join(sessionDir, `${id}.jsonl`), contents);
   }
   for (const sessionFile of options.initialSessions ?? []) {
     mkdirSync(sessionDir, { recursive: true });
     const contents = typeof sessionFile.contents === "string"
       ? sessionFile.contents
-      : JSON.stringify(sessionFile.contents, null, 2);
-    writeFileSync(join(sessionDir, `${sessionFile.id}.json`), contents);
+      : serializeStoredSession(sessionFile.contents);
+    writeFileSync(join(sessionDir, `${sessionFile.id}.jsonl`), contents);
   }
 
   const server = createServer((req, res) => {
@@ -447,12 +512,13 @@ async function captureCliRequest(args, stdin = "", options = {}) {
       ? readdirSync(sessionDir).map((filename) => {
           const raw = readFileSync(join(sessionDir, filename), "utf-8");
           let data;
+          let records = [];
           try {
-            data = JSON.parse(raw);
+            ({ data, records } = parseStoredSession(raw));
           } catch {
             data = undefined;
           }
-          return { filename, data, raw };
+          return { filename, data, records, raw };
         })
       : [];
 
@@ -481,5 +547,46 @@ function createStoredSession(overrides = {}) {
       },
     ],
     ...overrides,
+  };
+}
+
+function serializeStoredSession(session) {
+  const header = {
+    type: "session",
+    version: session.version,
+    id: session.id,
+    cwd: session.cwd,
+    model: session.model,
+    createdAt: session.createdAt,
+  };
+  const records = [header];
+  if (session.messages.length > 0) {
+    records.push({
+      type: "turn",
+      timestamp: session.updatedAt,
+      model: session.model,
+      messages: session.messages,
+    });
+  }
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+}
+
+function parseStoredSession(raw) {
+  const records = raw.trimEnd().split("\n").map((line) => JSON.parse(line));
+  const [header, ...turns] = records;
+  assert.equal(header.type, "session");
+
+  const lastTurn = turns.at(-1);
+  return {
+    records,
+    data: {
+      version: header.version,
+      id: header.id,
+      cwd: header.cwd,
+      model: lastTurn?.model ?? header.model,
+      createdAt: header.createdAt,
+      updatedAt: lastTurn?.timestamp ?? header.createdAt,
+      messages: turns.flatMap((turn) => turn.messages),
+    },
   };
 }
