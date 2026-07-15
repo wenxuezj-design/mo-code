@@ -6,7 +6,9 @@ import { Agent } from "../src/agent-loop.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
 test("Agent 默认发送静态 System Prompt", async () => {
-  const [request] = await captureRequests((url) => new Agent(url).chat("hello"));
+  const [request] = await captureRequests((url) => {
+    return new Agent({ baseURL: url }).chat("hello");
+  });
 
   assert.deepEqual(request.system[0], {
     type: "text",
@@ -19,7 +21,7 @@ test("Agent 默认发送静态 System Prompt", async () => {
 
 test("Agent 支持注入基线 Prompt 进行 A/B 评测", async () => {
   const [request] = await captureRequests((url) => {
-    return new Agent(url, "baseline prompt").chat("hello");
+    return new Agent({ baseURL: url, staticPrompt: "baseline prompt" }).chat("hello");
   });
 
   assert.equal(request.system[0].text, "baseline prompt");
@@ -29,7 +31,7 @@ test("Agent 支持注入基线 Prompt 进行 A/B 评测", async () => {
 
 test("Agent 只在第一条用户消息中注入项目上下文", async () => {
   const requests = await captureRequests(async (url) => {
-    const agent = new Agent(url);
+    const agent = new Agent({ baseURL: url });
     await agent.chat("first message");
     await agent.chat("second message");
   });

@@ -9,7 +9,7 @@ import {
 import { executeTool, toolDefinitions } from "./tools/index.ts";
 
 // 1. Type definitions
-type Message = {
+export type Message = {
   role: "user" | "assistant";
   content: string | ContentBlock[];
 };
@@ -32,7 +32,7 @@ type ToolResultBlock = {
   content: string;
 };
 
-type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
 
 type MessageResponse = {
   content: ContentBlock[];
@@ -40,6 +40,12 @@ type MessageResponse = {
 
 // 2. Model and tool definitions
 const MODEL = "mock";
+
+type AgentOptions = {
+  baseURL?: string;
+  staticPrompt?: string;
+  model?: string;
+};
 
 // 3. A tiny Anthropic-compatible client
 class AnthropicLikeClient {
@@ -73,14 +79,30 @@ export class Agent {
   private readFileState = new Map<string, number>();
   private systemPrompt: SystemPromptBlock[];
   private userContextReminder: string;
+  private model: string;
 
-  constructor(
-    baseURL = process.env.ANTHROPIC_BASE_URL ?? "http://127.0.0.1:3000",
-    staticPrompt = SYSTEM_PROMPT_TEMPLATE,
-  ) {
+  constructor(options: AgentOptions = {}) {
+    const baseURL = options.baseURL
+      ?? process.env.ANTHROPIC_BASE_URL
+      ?? "http://127.0.0.1:3000";
+    const staticPrompt = options.staticPrompt ?? SYSTEM_PROMPT_TEMPLATE;
+
     this.client = new AnthropicLikeClient(baseURL);
     this.systemPrompt = buildSystemPrompt(staticPrompt);
     this.userContextReminder = buildUserContextReminder();
+    this.model = options.model ?? MODEL;
+  }
+
+  getMessages(): Message[] {
+    return structuredClone(this.messages);
+  }
+
+  getModel(): string {
+    return this.model;
+  }
+
+  restoreMessages(messages: Message[]): void {
+    this.messages = structuredClone(messages);
   }
 
   async chat(userText: string): Promise<void> {
@@ -99,7 +121,7 @@ export class Agent {
 
     while (true) {
       const request = {
-        model: MODEL,
+        model: this.model,
         max_tokens: 4096,
         system: this.systemPrompt,
         tools: toolDefinitions,

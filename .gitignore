@@ -150,3 +150,6 @@ vite.config.ts.timestamp-*
 
 # webstorm
 /.idea
+
+# Generated exports
+exports/
