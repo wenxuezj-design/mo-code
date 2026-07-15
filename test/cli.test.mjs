@@ -121,6 +121,34 @@ test("交互模式读取输入并通过内置命令退出", async () => {
   }
 });
 
+test("/help 显示当前支持的 REPL 内置命令且不调用模型", async () => {
+  const result = await captureCliRequest([], "/help\n/exit\n");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 0);
+  assert.match(result.stdout, /REPL 内置命令:/);
+  assert.match(result.stdout, /\/help\s+显示这份帮助/);
+  assert.match(result.stdout, /\/status\s+显示当前会话状态/);
+  assert.match(result.stdout, /\/exit, \/quit\s+退出交互模式/);
+});
+
+test("/status 显示当前会话 ID、工作目录和模型且不调用模型", async () => {
+  const result = await captureCliRequest([], "/status\n/exit\n");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 0);
+  assert.match(
+    result.stdout,
+    /会话 ID: [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/,
+  );
+  assert.match(result.stdout, new RegExp(`工作目录: ${escapeRegExp(projectRoot)}`));
+  assert.match(result.stdout, /模型: mock/);
+});
+
 test("--print 缺少 Prompt 时直接退出", async () => {
   const result = await captureCliRequest(["--print"]);
 
@@ -743,4 +771,8 @@ function parseStoredSession(raw) {
       messages: turns.flatMap((turn) => turn.messages),
     },
   };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

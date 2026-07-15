@@ -30,6 +30,12 @@ Options:
       --max-budget-usd <amount>      限制本次运行的最大费用
 `;
 
+const REPL_HELP_TEXT = `REPL 内置命令:
+  /help          显示这份帮助
+  /status        显示当前会话状态
+  /exit, /quit   退出交互模式
+`;
+
 type ParsedArgs = {
   help: boolean;
   version: boolean;
@@ -296,7 +302,17 @@ async function runRepl(
   for await (const line of rl) {
     const input = line.trim();
     if (input === "/exit" || input === "/quit") break;
-    if (input) await chatAndSave(agent, session, input);
+    if (input === "/help") {
+      process.stdout.write(REPL_HELP_TEXT);
+    } else if (input === "/status") {
+      process.stdout.write(
+        `会话 ID: ${session.id}\n`
+        + `工作目录: ${session.cwd}\n`
+        + `模型: ${agent.getModel()}\n`,
+      );
+    } else if (input) {
+      await chatAndSave(agent, session, input);
+    }
     rl.prompt();
   }
 
