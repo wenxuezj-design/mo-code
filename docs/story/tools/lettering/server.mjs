@@ -1,5 +1,5 @@
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,13 +9,23 @@ import {
   resolvePageAsset,
 } from "./lib/asset-manifest.mjs";
 import { verifyLocalAsset } from "./lib/image-metadata.mjs";
-import { validatePageLayout } from "./lib/page-model.mjs";
+import {
+  isGeneratedSource,
+  isPortraitItem,
+  validatePageLayout,
+} from "./lib/page-model.mjs";
+import {
+  loadPortraitCatalog,
+  resolvePortraitImagePath,
+} from "./lib/portrait-catalog.mjs";
 import { resolvePagePaths } from "./lib/paths.mjs";
 import { atomicWrite, HttpError, readRequestBody, sendJson } from "./lib/http.mjs";
 
 const JSON_LIMIT = 1024 * 1024;
 const IMAGE_LIMIT = 25 * 1024 * 1024;
 const TOOL_ROOT = path.dirname(fileURLToPath(import.meta.url));
+const PORTRAIT_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9]\d*$/;
+const PAGE_LAYOUT_FILE_PATTERN = /^page-(\d{2})-lettering\.json$/;
 
 function parsePageRoute(pathname) {
   const match = pathname.match(/^\/api\/pages\/([^/]+)\/([^/]+)(?:\/(layout|base|export)(?:\/([^/]+))?)?$/);
@@ -30,6 +40,21 @@ function parsePageRoute(pathname) {
   } catch {
     throw new HttpError(400, "INVALID_PATH", "Malformed URL encoding");
   }
+}
+
+function parsePortraitRoute(pathname) {
+  const match = pathname.match(/^\/api\/portraits\/([^/]+)\/image$/);
+  if (!match) return null;
+  let portraitId;
+  try {
+    portraitId = decodeURIComponent(match[1]);
+  } catch {
+    throw new HttpError(400, "INVALID_PATH", "Malformed URL encoding");
+  }
+  if (!PORTRAIT_ID_PATTERN.test(portraitId)) {
+    throw new HttpError(400, "INVALID_PATH", "Invalid portrait ID");
+  }
+  return { portraitId };
 }
 
 async function serveFile(response, filePath, contentType) {
@@ -98,6 +123,57 @@ function baseContentType(asset) {
   );
 }
 
+function portraitContentType(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".png") return "image/png";
+  throw new HttpError(
+    415,
+    "UNSUPPORTED_PORTRAIT_FORMAT",
+    `Unsupported portrait image format: ${extension || "none"}`,
+  );
+}
+
+async function referencedPortraitMetadata({ projectRoot, layout }) {
+  const portraitIds = [...new Set(
+    layout.items.filter(isPortraitItem).map((item) => item.portraitId),
+  )];
+  if (portraitIds.length === 0) return {};
+
+  const catalog = await loadPortraitCatalog({ projectRoot });
+  const portraits = {};
+  for (const portraitId of portraitIds) {
+    if (!Object.hasOwn(catalog, portraitId)) {
+      throw new HttpError(400, "UNKNOWN_PORTRAIT_ID", `Unknown portrait ID: ${portraitId}`);
+    }
+    const { label, character, expression, crop } = catalog[portraitId];
+    portraits[portraitId] = {
+      label,
+      character,
+      expression,
+      crop,
+      imageUrl: `/api/portraits/${portraitId}/image`,
+    };
+  }
+  return portraits;
+}
+
+async function discoverPageNavigation({ layoutJson, currentPage }) {
+  const entries = await readdir(path.dirname(layoutJson), { withFileTypes: true });
+  const pages = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => PAGE_LAYOUT_FILE_PATTERN.exec(entry.name)?.[1] ?? null)
+    .filter((page) => page !== null)
+    .sort((left, right) => Number(left) - Number(right));
+  const currentIndex = pages.indexOf(currentPage);
+  return {
+    previous: currentIndex > 0 ? pages[currentIndex - 1] : null,
+    next: currentIndex >= 0 && currentIndex < pages.length - 1
+      ? pages[currentIndex + 1]
+      : null,
+  };
+}
+
 async function resolveBaseAsset({ projectRoot, route }) {
   const manifest = await loadAssetManifest({ projectRoot, chapter: route.chapter });
   const asset = resolvePageAsset({
@@ -114,6 +190,36 @@ async function resolveBaseAsset({ projectRoot, route }) {
 }
 
 async function handleApi(request, response, projectRoot, pathname) {
+  const portraitRoute = parsePortraitRoute(pathname);
+  if (portraitRoute) {
+    if (request.method !== "GET") return false;
+    const catalog = await loadPortraitCatalog({ projectRoot });
+    if (!Object.hasOwn(catalog, portraitRoute.portraitId)) {
+      throw new HttpError(
+        404,
+        "PORTRAIT_NOT_FOUND",
+        `Unknown portrait ID: ${portraitRoute.portraitId}`,
+      );
+    }
+    let filePath;
+    try {
+      filePath = resolvePortraitImagePath({
+        projectRoot,
+        portrait: catalog[portraitRoute.portraitId],
+      });
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        throw new HttpError(404, "PORTRAIT_IMAGE_NOT_FOUND", "Portrait image is missing");
+      }
+      if (error?.code === "PORTRAIT_PATH_OUTSIDE" || error?.code === "PORTRAIT_IMAGE_NOT_FILE") {
+        throw new HttpError(403, "PORTRAIT_IMAGE_UNSAFE", "Portrait image path is not allowed");
+      }
+      throw error;
+    }
+    await serveFile(response, filePath, portraitContentType(filePath));
+    return true;
+  }
+
   const route = parsePageRoute(pathname);
   if (!route) return false;
 
@@ -127,10 +233,24 @@ async function handleApi(request, response, projectRoot, pathname) {
   if (request.method === "GET" && route.action === "page") {
     const layout = validatePageLayout(JSON.parse(await readFile(paths.layoutJson, "utf8")));
     ensureLayoutMatchesRoute(layout, route);
+    const portraits = await referencedPortraitMetadata({ projectRoot, layout });
+    const navigation = await discoverPageNavigation({
+      layoutJson: paths.layoutJson,
+      currentPage: route.page,
+    });
+    if (isGeneratedSource(layout.source)) {
+      sendJson(response, 200, { layout, baseUrl: null, portraits, navigation });
+      return true;
+    }
     const { asset, filePath } = await resolveBaseAsset({ projectRoot, route });
     ensureLayoutMatchesAsset(layout, asset);
     await ensureBaseAvailable(filePath, asset, route);
-    sendJson(response, 200, { layout, baseUrl: `/api/pages/${route.chapter}/${route.page}/base` });
+    sendJson(response, 200, {
+      layout,
+      baseUrl: `/api/pages/${route.chapter}/${route.page}/base`,
+      portraits,
+      navigation,
+    });
     return true;
   }
 
@@ -161,8 +281,11 @@ async function handleApi(request, response, projectRoot, pathname) {
       throw new HttpError(400, "INVALID_LAYOUT", error.message);
     }
     ensureLayoutMatchesRoute(layout, route);
-    const { asset } = await resolveBaseAsset({ projectRoot, route });
-    ensureLayoutMatchesAsset(layout, asset);
+    await referencedPortraitMetadata({ projectRoot, layout });
+    if (!isGeneratedSource(layout.source)) {
+      const { asset } = await resolveBaseAsset({ projectRoot, route });
+      ensureLayoutMatchesAsset(layout, asset);
+    }
     await atomicWrite(paths.layoutJson, `${JSON.stringify(layout, null, 2)}\n`);
     sendJson(response, 200, { saved: true, itemCount: layout.items.length });
     return true;
@@ -191,6 +314,8 @@ async function handleStatic(request, response, pathname) {
     ["/lib/layout.mjs", ["lib/layout.mjs", "text/javascript; charset=utf-8"]],
     ["/lib/text-fit.mjs", ["lib/text-fit.mjs", "text/javascript; charset=utf-8"]],
     ["/lib/canvas-export.mjs", ["lib/canvas-export.mjs", "text/javascript; charset=utf-8"]],
+    ["/lib/page-model.mjs", ["lib/page-model.mjs", "text/javascript; charset=utf-8"]],
+    ["/lib/save-queue.mjs", ["lib/save-queue.mjs", "text/javascript; charset=utf-8"]],
   ]);
   const entry = files.get(pathname);
   if (!entry) return false;

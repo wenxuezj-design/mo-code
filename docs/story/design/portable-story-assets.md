@@ -11,7 +11,7 @@ mo-code 漫画预计包含约 13 个章节，每章 10–20 页。无字底图�
 采用“Git 资源清单 + rclone Google Drive 适配器 + 本地缓存”的混合方案。
 
 - Git 保存：`script.md`、`assets.json`、`page-*-lettering.json`、渲染器、测试和使用指南。
-- Google Drive 保存：原始 PNG、WebP 底图、人物设定图、页面成品和章节成品。
+- Google Drive 保存：原始 PNG、WebP 底图和人物设定图等无法由 Git 文本重建的素材；不保存页面成品或章节成品。
 - `.story-assets/` 保存本机缓存与导出结果，并始终被 Git 忽略。
 - `script.md` 不保存云盘链接；所有机器可读的资源信息进入章节级 `assets.json`。
 - 云盘资源采用不可变版本名，如 `page-02-base-v1.webp`。修改底图时上传 `v2`，不覆盖 `v1`。
@@ -52,8 +52,7 @@ mo-code-story-assets/
 └── chapters/
     └── 01-agent-loop/
         ├── sources/
-        ├── bases/
-        └── exports/
+        └── bases/
 ```
 
 ## 资源清单

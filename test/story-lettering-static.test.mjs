@@ -17,6 +17,13 @@ test("editor exposes the complete lettering workflow without a file picker", asy
   assert.match(html, /id="directionHorizontal"/);
   assert.match(html, /id="directionVertical"/);
   assert.match(html, /id="fontSize"/);
+  assert.match(html, /id="appearance"/);
+  assert.match(html, /id="portraitId"/);
+  assert.match(html, /id="textInspector"/);
+  assert.match(html, /id="portraitInspector"/);
+  assert.match(html, /id="pageThumbCanvas"/);
+  assert.match(html, /id="previousPage"/);
+  assert.match(html, /id="nextPage"/);
   assert.match(html, /id="autoFit"/);
   assert.match(html, /id="checkOverflow"/);
   assert.match(html, /id="exportWebp"/);
@@ -26,7 +33,18 @@ test("editor exposes the complete lettering workflow without a file picker", asy
   assert.match(app, /PUT/);
   assert.match(app, /exportFormat\("webp"\)/);
   assert.match(app, /exportFormat\("png"\)/);
-  assert.match(app, /drawLettering\(previewContext, layout\)/);
+  assert.match(app, /import \{ drawPage, renderPageBlob \} from "\/lib\/canvas-export\.mjs"/);
+  assert.match(app, /import \{ createSaveQueue \} from "\/lib\/save-queue\.mjs"/);
+  assert.match(app, /drawPage\(previewContext, \{[\s\S]*?layout,[\s\S]*?portraits[\s\S]*?\}\)/);
+  assert.match(app, /window\.__storyExportPage = exportPageForAutomation/);
+  assert.match(app, /\{ layout, baseUrl, portraits: portraitMetadata, navigation \} = await response\.json\(\)/);
+  assert.match(
+    app,
+    /async function navigateToPage\(targetPage\) \{[\s\S]*?clearTimeout\(saveTimer\);[\s\S]*?await saveLayout\(\);[\s\S]*?location\.assign\(targetUrl\);[\s\S]*?\}/,
+    "page navigation must flush the pending edit before leaving the current page",
+  );
+  assert.match(app, /refs\.previousPage\.disabled = [^;]*navigation\.previous === null/);
+  assert.match(app, /refs\.nextPage\.disabled = [^;]*navigation\.next === null/);
   assert.match(app, /refs\.textValue\.addEventListener\("input", \(\) => \{[\s\S]*?renderPreview\(\);[\s\S]*?\}\);/);
   assert.match(app, /await Promise\.all\(layout\.items\.map[\s\S]*?renderPreview\(\);/);
   assert.match(
@@ -41,6 +59,30 @@ test("editor exposes the complete lettering workflow without a file picker", asy
   );
   assert.match(styles, /\.resize-handle/);
   assert.match(styles, /\.lettering-preview/);
+});
+
+test("editor branches generated pages and text/portrait controls", async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL("index.html", root), "utf8"),
+    readFile(new URL("app.js", root), "utf8"),
+  ]);
+
+  assert.match(html, /<select id="appearance"/);
+  assert.match(html, /<select id="portraitId"/);
+  assert.match(app, /isTextItem\(item\)/);
+  assert.match(app, /isPortraitItem\(item\)/);
+  assert.match(app, /if \(!isTextItem\(item\)\) continue;/);
+  assert.match(app, /refs\.textInspector\.hidden = !isTextItem\(item\)/);
+  assert.match(app, /refs\.portraitInspector\.hidden = !isPortraitItem\(item\)/);
+  assert.match(app, /refs\.baseImage\.hidden = baseUrl === null/);
+  assert.match(app, /refs\.pageThumbCanvas\.hidden = baseUrl !== null/);
+  assert.match(app, /image: baseUrl === null \? null : refs\.baseImage/);
+  assert.match(app, /Object\.entries\(portraitMetadata\)/);
+  assert.match(
+    app,
+    /if \(!item\) \{[\s\S]*?refs\.textInspector\.hidden = true;[\s\S]*?refs\.portraitInspector\.hidden = true;[\s\S]*?refs\.autoFit\.disabled = true;[\s\S]*?refs\.geometry\.replaceChildren\(\);[\s\S]*?return;[\s\S]*?\}/,
+    "an empty generated page must not expose controls for a nonexistent item",
+  );
 });
 
 test("editor keeps the stage visible while dialogue controls scroll independently", async () => {

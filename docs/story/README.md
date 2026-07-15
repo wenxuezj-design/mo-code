@@ -118,13 +118,13 @@ pnpm story:lettering
 http://127.0.0.1:41731/?chapter=01-agent-loop&page=01
 ```
 
-换页时直接修改 URL 的 `page` 并刷新，例如第 2 页：
+编辑器左侧提供“上一页”和“下一页”，会在保存当前布局后切换到相邻的实际页面；第一页和最后一页对应按钮自动禁用。也可以通过 URL 直接打开指定页面，例如第 2 页：
 
 ```text
 http://127.0.0.1:41731/?chapter=01-agent-loop&page=02
 ```
 
-章节名必须是小写 kebab-case，页码必须恰好两位。页面还必须同时存在清单条目和对应的 `page-<page>-lettering.json`。编辑约 400 ms 后自动保存到布局 JSON；关闭浏览器前确认右上角显示“已保存”。
+章节名必须是小写 kebab-case，页码必须恰好两位，所有页面都必须存在对应的 `page-<page>-lettering.json`。使用漫画底图的页面还需要 `assets.json` 清单条目和已验证 cache；`source.kind="generated"` 的附录页由布局直接绘制，不需要底图清单。编辑约 400 ms 后自动保存到布局 JSON；关闭浏览器前确认右上角显示“已保存”。
 
 ## 导出
 
@@ -165,16 +165,11 @@ pnpm story:export -- --chapter 01-agent-loop --formats web,pdf,cbz
 
 `--formats` 可以选择 `web`、`pdf`、`cbz` 的任意非重复组合。`--page` 只用于单页 `pages` 导出，不能与章节打包格式组合。
 
-final 与章节包都是可重建成品，不属于 `assets.json`，也不进入 Git。需要在 Drive 备份当前整章 exports 时另行运行 rclone；不要用只处理底图的 `story:assets:push`：
-
-```bash
-rclone copy \
-  .story-assets/exports/01-agent-loop/ \
-  "${STORY_RCLONE_REMOTE}chapters/01-agent-loop/exports/" \
-  --progress
-```
+final 与章节包都是可重建成品，不属于 `assets.json`，不进入 Git，也不上传 Google Drive。修改脚本或排字 JSON 后直接重新导出；同名本地成品会被最新结果替换。Drive 只保存无法由 Git 文本重建的底图、原稿和人物素材。
 
 ## 上传新的底图版本
+
+生成候选底图本身不会触发上传。即使同一页生成了多版，也只在用户确认最终底图后执行一次 push；未采用的中间图留在本机并可直接删除。只有已经采用的底图后来确实发生替换时，才递增远端版本号。
 
 Drive 中的底图名称不可变。修改现有 v1 时必须选择尚未使用的 v2，不能覆盖或复用旧版本号。上传命令会用 rclone 的 immutable + checksum 校验拒绝用不同内容覆盖同名远端文件。先查看远端已有版本：
 
@@ -251,7 +246,7 @@ git check-ignore -v --no-index docs/story/path/to/candidate.webp
   ```
 
 - 导出提示文字溢出：在网页中扩大区域或使用“自动适配”，等待显示“已保存”后重试。
-- 章节导出缺页：确认每个 `page-*-lettering.json` 都有清单条目和已验证 cache；整章命令会重建所有发现的页面。
+- 章节导出缺页：先确认对应的 `page-*-lettering.json` 存在；底图页还要有清单条目和已验证 cache，`source.kind="generated"` 的附录页不需要。整章命令会重建所有发现的页面。
 - 导出中断：布局 JSON 与已完成的页面输出会保留；修复错误后重复同一命令即可覆盖可重建成品。
 
 本工具绑定 `127.0.0.1`，面向用户本人控制的可信本地仓库；安全路径校验用于阻止 URL/参数路径穿越，不把仓库当成可执行不可信内容的沙箱。不要在来源不可信、含可疑符号链接的 checkout 中启动编辑器。

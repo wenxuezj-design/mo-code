@@ -92,3 +92,66 @@ test("HTTP first-page workflow serves the cached base and persists edits and exp
   assert.deepEqual(await readFile(path.join(exportsDir, "page-01-final.webp")), webp);
   assert.deepEqual(await readFile(path.join(exportsDir, "page-01-final.png")), png);
 });
+
+test("HTTP generated appendix workflow persists edits and exports without a base manifest", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "lettering-generated-e2e-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pageDir = path.join(root, "docs/story/chapters/01-agent-loop/pages");
+  const characterDir = path.join(root, "docs/story/assets/characters");
+  const sheetDir = path.join(characterDir, "wakaba-mutsu");
+  const exportsDir = path.join(root, ".story-assets/exports/01-agent-loop/pages");
+  await mkdir(pageDir, { recursive: true });
+  await mkdir(sheetDir, { recursive: true });
+  const portraitId = "wakaba-mutsu-gentle-v1";
+  const initial = {
+    version: 1,
+    chapter: "01-agent-loop",
+    page: "12",
+    source: { kind: "generated", width: 400, height: 600, background: "#f7f5ef" },
+    items: [{
+      id: "P01", type: "portrait", portraitId,
+      x: 20, y: 20, width: 120, height: 120, shape: "rounded", grayscale: true,
+    }],
+  };
+  const portraits = {
+    [portraitId]: {
+      label: "若叶睦 · 温柔", character: "若叶睦", expression: "温柔",
+      file: "wakaba-mutsu/character-sheet-v1.webp",
+      crop: { x: 1050, y: 0, width: 390, height: 390 },
+    },
+  };
+  const portraitBytes = Buffer.from("RIFF-e2e-portrait-WEBP");
+  await writeFile(path.join(pageDir, "page-12-lettering.json"), JSON.stringify(initial));
+  await writeFile(path.join(characterDir, "portraits.json"), JSON.stringify(portraits));
+  await writeFile(path.join(sheetDir, "character-sheet-v1.webp"), portraitBytes);
+
+  const app = await createLetteringServer({ projectRoot: root, host: "127.0.0.1", port: 0 });
+  t.after(() => new Promise((resolve) => app.server.close(resolve)));
+
+  const response = await fetch(`${app.url}/api/pages/01-agent-loop/12`);
+  assert.equal(response.status, 200);
+  const page = await response.json();
+  assert.equal(page.baseUrl, null);
+  assert.equal(page.portraits[portraitId].imageUrl, `/api/portraits/${portraitId}/image`);
+  assert.deepEqual(
+    Buffer.from(await (await fetch(`${app.url}${page.portraits[portraitId].imageUrl}`)).arrayBuffer()),
+    portraitBytes,
+  );
+
+  page.layout.items[0].width = 150;
+  const save = await fetch(`${app.url}/api/pages/01-agent-loop/12/layout`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(page.layout),
+  });
+  assert.equal(save.status, 200);
+  const reloaded = await (await fetch(`${app.url}/api/pages/01-agent-loop/12`)).json();
+  assert.equal(reloaded.layout.items[0].width, 150);
+
+  const png = Buffer.from("PNG-generated-e2e");
+  assert.equal(
+    (await fetch(`${app.url}/api/pages/01-agent-loop/12/export/png`, { method: "POST", body: png })).status,
+    200,
+  );
+  assert.deepEqual(await readFile(path.join(exportsDir, "page-12-final.png")), png);
+});

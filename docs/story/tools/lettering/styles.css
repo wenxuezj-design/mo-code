@@ -15,7 +15,7 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
 body { margin: 0; min-width: 1040px; background: var(--paper); color: var(--ink); }
-button, textarea, input { font: inherit; }
+button, textarea, input, select { font: inherit; }
 button { color: inherit; }
 
 .app-shell { height: 100vh; height: 100dvh; min-height: 0; display: grid; grid-template-rows: 64px minmax(0, 1fr) 38px; }
@@ -44,10 +44,12 @@ button { color: inherit; }
 .inspector-sidebar { border-left: 1px solid var(--line); display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 20px; overflow: hidden; }
 .eyebrow { margin: 0 0 10px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; }
 .page-summary { display: grid; grid-template-columns: 56px 1fr; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 11px; background: #fbfcfb; }
-.page-summary img { width: 56px; height: 86px; object-fit: cover; object-position: top; border: 1px solid #cdd5d1; }
+.page-summary img, .page-summary canvas { width: 56px; height: 86px; object-fit: cover; object-position: top; border: 1px solid #cdd5d1; }
 .page-summary strong, .page-summary small { display: block; }
 .page-summary strong { margin-top: 7px; font-size: 13px; }
 .page-summary small { margin-top: 5px; color: var(--muted); line-height: 1.5; }
+.page-navigation { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; }
+.page-navigation .button { min-width: 0; padding: 7px 5px; font-size: 11px; white-space: nowrap; }
 .sidebar-section { margin-top: 24px; }
 .layer-row { display: flex; justify-content: space-between; padding: 7px 2px; font-size: 12px; }
 .layer-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; }
@@ -90,7 +92,9 @@ button { color: inherit; }
 .field { display: grid; gap: 7px; margin-bottom: 14px; color: var(--muted); font-size: 11px; }
 .field > span { display: flex; justify-content: space-between; }
 textarea { resize: vertical; width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px; color: var(--ink); line-height: 1.5; }
-textarea:focus { outline: 2px solid rgba(79,141,120,.22); border-color: var(--mint); }
+select { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px; color: var(--ink); background: white; }
+textarea:focus, select:focus { outline: 2px solid rgba(79,141,120,.22); border-color: var(--mint); }
+.field-note { margin: 0 0 14px; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 9px; background: #eef1ef; }
 .segmented button { border: 0; border-radius: 7px; padding: 7px; background: transparent; cursor: pointer; }
 .segmented button.active { background: white; box-shadow: 0 1px 4px rgba(0,0,0,.08); }

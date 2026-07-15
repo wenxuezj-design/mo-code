@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -61,6 +61,50 @@ function layout() {
   };
 }
 
+const PORTRAIT_ID = "wakaba-mortis-confused-v1";
+const PORTRAIT_BYTES = Buffer.from("RIFF-portrait-WEBP");
+
+function generatedLayout() {
+  return {
+    version: 1,
+    chapter: "01-agent-loop",
+    page: "12",
+    source: { kind: "generated", width: 400, height: 600, background: "#f7f5ef" },
+    items: [
+      {
+        id: "P01", type: "portrait", portraitId: PORTRAIT_ID,
+        x: 20, y: 20, width: 120, height: 120, shape: "circle", grayscale: true,
+      },
+      {
+        id: "T01", type: "technical", speaker: null, text: "同一颗心脏",
+        direction: "horizontal", x: 20, y: 170, width: 300, height: 80,
+        padding: 10, fontFamily: "PingFang SC", fontSize: 28,
+        minFontSize: 18, fontWeight: 700, lineHeight: 1.25, align: "left",
+        appearance: "title",
+      },
+    ],
+  };
+}
+
+function generatedTextLayout(page) {
+  const value = layout();
+  value.page = page;
+  value.source = { kind: "generated", width: 864, height: 1821, background: "#f7f5ef" };
+  return value;
+}
+
+function portraitCatalog() {
+  return {
+    [PORTRAIT_ID]: {
+      label: "若叶墨 · 困惑",
+      character: "若叶墨",
+      expression: "困惑",
+      file: "wakaba-mortis/character-sheet-v1.webp",
+      crop: { x: 835, y: 80, width: 380, height: 380 },
+    },
+  };
+}
+
 function manifest() {
   return {
     version: 1,
@@ -115,6 +159,29 @@ async function fixture(
   return { root, pageDir, cacheDir, exportsDir, ...app };
 }
 
+async function generatedFixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "lettering-generated-server-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pageDir = path.join(root, "docs/story/chapters/01-agent-loop/pages");
+  const characterDir = path.join(root, "docs/story/assets/characters");
+  const sheetDir = path.join(characterDir, "wakaba-mortis");
+  const exportsDir = path.join(root, ".story-assets/exports/01-agent-loop/pages");
+  await mkdir(pageDir, { recursive: true });
+  await mkdir(sheetDir, { recursive: true });
+  await writeFile(
+    path.join(pageDir, "page-12-lettering.json"),
+    `${JSON.stringify(generatedLayout(), null, 2)}\n`,
+  );
+  await writeFile(
+    path.join(characterDir, "portraits.json"),
+    `${JSON.stringify(portraitCatalog(), null, 2)}\n`,
+  );
+  await writeFile(path.join(sheetDir, "character-sheet-v1.webp"), PORTRAIT_BYTES);
+  const app = await createLetteringServer({ projectRoot: root, host: "127.0.0.1", port: 0 });
+  t.after(() => new Promise((resolve) => app.server.close(resolve)));
+  return { root, pageDir, exportsDir, ...app };
+}
+
 test("GET page returns layout and base URL", async (t) => {
   const app = await fixture(t);
   const response = await fetch(`${app.url}/api/pages/01-agent-loop/01`);
@@ -123,6 +190,105 @@ test("GET page returns layout and base URL", async (t) => {
   const value = await response.json();
   assert.equal(value.layout.items[0].id, "D01");
   assert.equal(value.baseUrl, "/api/pages/01-agent-loop/01/base");
+  assert.deepEqual(value.portraits, {});
+});
+
+test("GET save queue module serves the browser serialization helper", async (t) => {
+  const app = await fixture(t);
+  const response = await fetch(`${app.url}/lib/save-queue.mjs`);
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type"), /text\/javascript/);
+  assert.match(await response.text(), /export function createSaveQueue/);
+});
+
+test("GET page returns neighboring pages from the actual lettering files", async (t) => {
+  const app = await fixture(t);
+  for (const page of ["03", "07"]) {
+    await writeFile(
+      path.join(app.pageDir, `page-${page}-lettering.json`),
+      `${JSON.stringify(generatedTextLayout(page), null, 2)}\n`,
+    );
+  }
+
+  const first = await fetch(`${app.url}/api/pages/01-agent-loop/01`);
+  const middle = await fetch(`${app.url}/api/pages/01-agent-loop/03`);
+  const last = await fetch(`${app.url}/api/pages/01-agent-loop/07`);
+
+  assert.equal(first.status, 200);
+  assert.equal(middle.status, 200);
+  assert.equal(last.status, 200);
+  assert.deepEqual((await first.json()).navigation, { previous: null, next: "03" });
+  assert.deepEqual((await middle.json()).navigation, { previous: "01", next: "07" });
+  assert.deepEqual((await last.json()).navigation, { previous: "03", next: null });
+});
+
+test("GET generated page needs no asset manifest and returns safe referenced portrait metadata", async (t) => {
+  const app = await generatedFixture(t);
+  const response = await fetch(`${app.url}/api/pages/01-agent-loop/12`);
+
+  assert.equal(response.status, 200);
+  const value = await response.json();
+  assert.equal(value.layout.source.kind, "generated");
+  assert.equal(value.baseUrl, null);
+  assert.deepEqual(value.portraits, {
+    [PORTRAIT_ID]: {
+      label: "若叶墨 · 困惑",
+      character: "若叶墨",
+      expression: "困惑",
+      crop: { x: 835, y: 80, width: 380, height: 380 },
+      imageUrl: `/api/portraits/${PORTRAIT_ID}/image`,
+    },
+  });
+  assert.equal(Object.hasOwn(value.portraits[PORTRAIT_ID], "file"), false);
+});
+
+test("GET portrait image serves only the catalog-owned character sheet", async (t) => {
+  const app = await generatedFixture(t);
+  const response = await fetch(`${app.url}/api/portraits/${PORTRAIT_ID}/image`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/webp");
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), PORTRAIT_BYTES);
+});
+
+test("portrait image route rejects unknown IDs and traversal", async (t) => {
+  const app = await generatedFixture(t);
+  const unknown = await fetch(`${app.url}/api/portraits/wakaba-mortis-unknown-v1/image`);
+  const traversal = await fetch(`${app.url}/api/portraits/%2E%2E%2Fsecret/image`);
+
+  assert.equal(unknown.status, 404);
+  assert.equal((await unknown.json()).code, "PORTRAIT_NOT_FOUND");
+  assert.equal(traversal.status, 400);
+  assert.equal((await traversal.json()).code, "INVALID_PATH");
+});
+
+test("portrait image route refuses a catalog sheet symlink that escapes the character root", async (t) => {
+  const app = await generatedFixture(t);
+  const sheetPath = path.join(
+    app.root,
+    "docs/story/assets/characters/wakaba-mortis/character-sheet-v1.webp",
+  );
+  const outsideBytes = Buffer.from("private-outside-portrait");
+  const outsidePath = path.join(app.root, "private.webp");
+  await writeFile(outsidePath, outsideBytes);
+  await rm(sheetPath);
+  try {
+    await symlink(outsidePath, sheetPath, "file");
+  } catch (error) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      t.skip("file symlinks are unavailable on this platform");
+      return;
+    }
+    throw error;
+  }
+
+  const response = await fetch(`${app.url}/api/portraits/${PORTRAIT_ID}/image`);
+  const body = Buffer.from(await response.arrayBuffer());
+
+  assert.equal(response.status, 403);
+  assert.equal(JSON.parse(body.toString("utf8")).code, "PORTRAIT_IMAGE_UNSAFE");
+  assert.notDeepEqual(body, outsideBytes);
 });
 
 test("GET base serves the manifest-selected PNG cache file with its correct MIME", async (t) => {
@@ -222,6 +388,38 @@ test("PUT layout atomically saves validated JSON", async (t) => {
   assert.equal(response.status, 200);
   const saved = JSON.parse(await readFile(path.join(app.pageDir, "page-01-lettering.json"), "utf8"));
   assert.equal(saved.items[0].x, 88);
+});
+
+test("PUT generated layout skips the base manifest and validates referenced portrait IDs", async (t) => {
+  const app = await generatedFixture(t);
+  const updated = generatedLayout();
+  updated.items[0].x = 42;
+  const response = await fetch(`${app.url}/api/pages/01-agent-loop/12/layout`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(updated),
+  });
+
+  assert.equal(response.status, 200);
+  const saved = JSON.parse(await readFile(path.join(app.pageDir, "page-12-lettering.json"), "utf8"));
+  assert.equal(saved.items[0].x, 42);
+});
+
+test("PUT generated layout rejects an unknown portrait without replacing the file", async (t) => {
+  const app = await generatedFixture(t);
+  const layoutPath = path.join(app.pageDir, "page-12-lettering.json");
+  const before = await readFile(layoutPath, "utf8");
+  const updated = generatedLayout();
+  updated.items[0].portraitId = "wakaba-mortis-unknown-v1";
+  const response = await fetch(`${app.url}/api/pages/01-agent-loop/12/layout`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(updated),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, "UNKNOWN_PORTRAIT_ID");
+  assert.equal(await readFile(layoutPath, "utf8"), before);
 });
 
 test("PUT layout rejects asset source mismatches without replacing the file", async (t) => {

@@ -34,7 +34,10 @@ test("browser hook waits for readiness and exports PNG and WebP through the page
   assert.match(app, /document\.fonts\.ready/);
   assert.match(app, /await saveLayout\(\)/);
   assert.match(app, /checkAllOverflow\(\{ announce: false \}\)/);
-  assert.match(app, /renderPageBlob\(\{ image: refs\.baseImage, layout, format \}\)/);
+  assert.match(
+    app,
+    /renderPageBlob\(\{[\s\S]*?image: baseUrl === null \? null : refs\.baseImage,[\s\S]*?portraits: portraitRenderData,[\s\S]*?format,[\s\S]*?\}\)/,
+  );
 });
 
 test("CLI parser accepts pnpm's delimiter and only two-digit pages and supported formats", async () => {
