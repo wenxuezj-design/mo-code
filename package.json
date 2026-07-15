@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "cli": "node --no-warnings --experimental-strip-types src/cli.ts",
+    "cli": "node --no-warnings --experimental-strip-types src/cli/main.ts",
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --noEmit"
   },

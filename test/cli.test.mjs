@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cliPath = resolve(projectRoot, "src", "cli.ts");
+const cliPath = resolve(projectRoot, "src", "cli", "main.ts");
 const sessionId = "550e8400-e29b-41d4-a716-446655440000";
 const olderSessionId = "550e8400-e29b-41d4-a716-446655440001";
 const latestSessionId = "550e8400-e29b-41d4-a716-446655440002";

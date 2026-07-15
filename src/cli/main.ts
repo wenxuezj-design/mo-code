@@ -1,15 +1,15 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { Agent } from "./agent-loop.ts";
-import { HELP_TEXT, parseArgs, type ParsedArgs } from "./cli/args.ts";
-import { runRepl, runTurn } from "./cli/conversation.ts";
+import { Agent } from "../agent-loop.ts";
+import { HELP_TEXT, parseArgs, type ParsedArgs } from "./args.ts";
+import { runRepl, runTurn } from "./conversation.ts";
 import {
   confirmSessionDeletion,
   reportSkippedSessionFiles,
   selectSession,
   selectSessionToDelete,
-} from "./cli/session-ui.ts";
+} from "./session-ui.ts";
 import {
   createSession,
   deleteSession,
@@ -17,13 +17,13 @@ import {
   listSessions,
   loadSession,
   type SessionData,
-} from "./session.ts";
+} from "../session.ts";
 
-export { HELP_TEXT, parseArgs } from "./cli/args.ts";
+export { HELP_TEXT, parseArgs } from "./args.ts";
 
 function getVersion(): string {
   const packageJson = JSON.parse(
-    readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+    readFileSync(new URL("../../package.json", import.meta.url), "utf-8"),
   ) as { version?: unknown };
 
   if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
