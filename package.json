@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0"
+    "@types/node": "^26.1.0",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "glob": "^13.0.6"
