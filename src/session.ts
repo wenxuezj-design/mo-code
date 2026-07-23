@@ -199,6 +199,7 @@ export function listSessions(cwd: string): SessionListResult {
   }
 
   // updatedAt 由 Date.toISOString() 生成，同一格式的字符串可直接比较先后。
+  // 倒序排序，时间新的会排在前面
   sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return { sessions, skippedFiles };
 }
