@@ -87,8 +87,10 @@ function messageFromRequest(body, requestIndex) {
   };
 }
 
-export function startMockAnthropic() {
+export function startMockAnthropic(options = {}) {
   let requestIndex = 0;
+  const requests = [];
+  const requestHeaders = [];
 
   const server = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/messages") {
@@ -111,7 +113,12 @@ export function startMockAnthropic() {
         return;
       }
 
-      const message = messageFromRequest(body, requestIndex++);
+      requests.push(body);
+      requestHeaders.push(req.headers);
+      const message = options.responses?.[requestIndex]
+        ?? options.response
+        ?? messageFromRequest(body, requestIndex);
+      requestIndex++;
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(message));
     });
@@ -124,6 +131,8 @@ export function startMockAnthropic() {
       resolve({
         port,
         url: `http://127.0.0.1:${port}`,
+        requests,
+        requestHeaders,
         close: () => new Promise((done) => server.close(done)),
       });
     });

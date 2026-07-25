@@ -8,13 +8,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 import assert from "node:assert/strict";
 import test from "node:test";
+
+import { startMockAnthropic } from "../mock/mock-anthropic.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = resolve(projectRoot, "src", "cli", "main.ts");
@@ -613,7 +614,6 @@ test("会话保存失败时警告但不中断后续对话", async () => {
 });
 
 async function captureCliRequest(args, stdin = "", options = {}) {
-  const requests = [];
   const testRoot = mkdtempSync(join(tmpdir(), "mo-code-cli-"));
   const home = options.invalidHome ? join(testRoot, "home-file") : join(testRoot, "home");
   if (options.invalidHome) {
@@ -638,27 +638,12 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     writeFileSync(join(sessionDir, `${sessionFile.id}.jsonl`), contents);
   }
 
-  const server = createServer((req, res) => {
-    let raw = "";
-    req.setEncoding("utf-8");
-    req.on("data", (chunk) => {
-      raw += chunk;
-    });
-    req.on("end", () => {
-      requests.push(JSON.parse(raw));
-      const response = options.responses?.[requests.length - 1]
-        ?? { content: [{ type: "text", text: "done" }] };
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(response));
-    });
+  const mock = await startMockAnthropic({
+    responses: options.responses,
+    response: { content: [{ type: "text", text: "done" }] },
   });
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const address = server.address();
-    assert.equal(typeof address, "object");
-    assert.ok(address);
-
     const child = spawn(
       process.execPath,
       ["--no-warnings", "--experimental-strip-types", cliPath, ...args],
@@ -666,7 +651,9 @@ async function captureCliRequest(args, stdin = "", options = {}) {
         cwd: projectRoot,
         env: {
           ...process.env,
-          ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+          ANTHROPIC_API_KEY: "mock",
+          ANTHROPIC_BASE_URL: mock.url,
+          ANTHROPIC_MODEL: "mock",
           HOME: home,
         },
         stdio: ["pipe", "pipe", "pipe"],
@@ -704,11 +691,9 @@ async function captureCliRequest(args, stdin = "", options = {}) {
         })
       : [];
 
-    return { status, stdout, stderr, requests, sessions };
+    return { status, stdout, stderr, requests: mock.requests, sessions };
   } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
+    await mock.close();
     rmSync(testRoot, { recursive: true, force: true });
   }
 }

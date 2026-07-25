@@ -1,5 +1,7 @@
 import { pathToFileURL } from "node:url";
 
+import Anthropic from "@anthropic-ai/sdk";
+
 import {
   SYSTEM_PROMPT_TEMPLATE,
   buildSystemPrompt,
@@ -9,72 +11,22 @@ import {
 import { executeTool, toolDefinitions } from "./tools/index.ts";
 
 // 1. Type definitions
-export type Message = {
-  role: "user" | "assistant";
-  content: string | ContentBlock[];
-};
-
-type TextBlock = {
-  type: "text";
-  text: string;
-};
-
-type ToolUseBlock = {
-  type: "tool_use";
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-};
-
-type ToolResultBlock = {
-  type: "tool_result";
-  tool_use_id: string;
-  content: string;
-};
-
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
-
-type MessageResponse = {
-  content: ContentBlock[];
-};
+export type Message = Anthropic.MessageParam;
+export type ContentBlock = Anthropic.ContentBlockParam;
 
 // 2. Model and tool definitions
-const MODEL = "mock";
+const MODEL = "claude-sonnet-4-6";
 
 type AgentOptions = {
   baseURL?: string;
+  apiKey?: string;
   staticPrompt?: string;
   model?: string;
 };
 
-// 3. A tiny Anthropic-compatible client
-class AnthropicLikeClient {
-  private baseURL: string;
-
-  constructor(baseURL: string) {
-    this.baseURL = baseURL;
-  }
-
-  messages = {
-    create: async (request: Record<string, unknown>): Promise<MessageResponse> => {
-      const response = await fetch(`${this.baseURL}/v1/messages`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(request),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Mock request failed: ${response.status} ${await response.text()}`);
-      }
-
-      return response.json() as Promise<MessageResponse>;
-    },
-  };
-}
-
-// 4. Agent Loop
+// 3. Agent Loop
 export class Agent {
-  private client: AnthropicLikeClient;
+  private client: Anthropic;
   private messages: Message[] = [];
   private readFileState = new Map<string, number>();
   private systemPrompt: SystemPromptBlock[];
@@ -82,15 +34,17 @@ export class Agent {
   private model: string;
 
   constructor(options: AgentOptions = {}) {
-    const baseURL = options.baseURL
-      ?? process.env.ANTHROPIC_BASE_URL
-      ?? "http://127.0.0.1:3000";
     const staticPrompt = options.staticPrompt ?? SYSTEM_PROMPT_TEMPLATE;
 
-    this.client = new AnthropicLikeClient(baseURL);
+    this.client = new Anthropic({
+      apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY,
+      // 只使用项目显式配置的 API Key，避免同时发送环境中继承的 Claude Code Token。
+      authToken: null,
+      baseURL: options.baseURL ?? process.env.ANTHROPIC_BASE_URL,
+    });
     this.systemPrompt = buildSystemPrompt(staticPrompt);
     this.userContextReminder = buildUserContextReminder();
-    this.model = options.model ?? MODEL;
+    this.model = options.model ?? process.env.ANTHROPIC_MODEL ?? MODEL;
   }
 
   getMessages(): Message[] {
@@ -136,15 +90,19 @@ export class Agent {
 
       this.messages.push({ role: "assistant", content: reply.content });
 
-      const toolUses = reply.content.filter((block): block is ToolUseBlock => block.type === "tool_use");
+      const toolUses = reply.content.filter(
+        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+      );
       if (toolUses.length === 0) return;
 
-      const results: ToolResultBlock[] = [];
+      const results: Anthropic.ToolResultBlockParam[] = [];
       for (const toolUse of toolUses) {
         console.log(`  -> ${toolUse.name}(${JSON.stringify(toolUse.input)})`);
-        const output = await executeTool(toolUse.name, toolUse.input, {
-          readFileState: this.readFileState,
-        });
+        const output = await executeTool(
+          toolUse.name,
+          toolUse.input as Record<string, unknown>,
+          { readFileState: this.readFileState },
+        );
         results.push({ type: "tool_result", tool_use_id: toolUse.id, content: output });
       }
 
@@ -153,7 +111,7 @@ export class Agent {
   }
 }
 
-// 5. CLI entry
+// 4. CLI entry
 async function main() {
   const prompt = process.argv.slice(2).join(" ") || "Read the file greeting.txt and tell me what it says.";
   await new Agent().chat(prompt);

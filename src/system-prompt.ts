@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import * as os from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type Anthropic from "@anthropic-ai/sdk";
 import { globSync } from "glob";
 
 import { getGitContext } from "./git-context.ts";
@@ -48,13 +49,7 @@ export const SYSTEM_PROMPT_TEMPLATE = `你是 mo-code，一个帮助用户理解
 - 完成任务后简要说明结果；如有修改，说明改了什么以及如何验证。
 `;
 
-export type SystemPromptBlock = {
-  type: "text";
-  text: string;
-  cache_control?: {
-    type: "ephemeral";
-  };
-};
+export type SystemPromptBlock = Anthropic.TextBlockParam;
 
 export function buildSystemPrompt(
   staticPrompt = SYSTEM_PROMPT_TEMPLATE,

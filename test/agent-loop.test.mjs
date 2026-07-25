@@ -1,13 +1,13 @@
-import { createServer } from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { startMockAnthropic } from "../mock/mock-anthropic.mjs";
 import { Agent } from "../src/agent-loop.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
 test("Agent 默认发送静态 System Prompt", async () => {
   const [request] = await captureRequests((url) => {
-    return new Agent({ baseURL: url }).chat("hello");
+    return new Agent({ baseURL: url, apiKey: "mock" }).chat("hello");
   });
 
   assert.deepEqual(request.system[0], {
@@ -21,7 +21,11 @@ test("Agent 默认发送静态 System Prompt", async () => {
 
 test("Agent 支持注入基线 Prompt 进行 A/B 评测", async () => {
   const [request] = await captureRequests((url) => {
-    return new Agent({ baseURL: url, staticPrompt: "baseline prompt" }).chat("hello");
+    return new Agent({
+      baseURL: url,
+      apiKey: "mock",
+      staticPrompt: "baseline prompt",
+    }).chat("hello");
   });
 
   assert.equal(request.system[0].text, "baseline prompt");
@@ -29,9 +33,31 @@ test("Agent 支持注入基线 Prompt 进行 A/B 评测", async () => {
   assert.match(request.system[1].text, /# Environment/);
 });
 
+test("Agent 不发送环境中继承的 Anthropic Auth Token", async () => {
+  const previousAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  const mock = await startMockAnthropic({
+    response: { content: [{ type: "text", text: "done" }] },
+  });
+
+  process.env.ANTHROPIC_AUTH_TOKEN = "inherited-token";
+  try {
+    await new Agent({ baseURL: mock.url, apiKey: "project-key" }).chat("hello");
+
+    assert.equal(mock.requestHeaders[0]["x-api-key"], "project-key");
+    assert.equal(mock.requestHeaders[0].authorization, undefined);
+  } finally {
+    if (previousAuthToken === undefined) {
+      delete process.env.ANTHROPIC_AUTH_TOKEN;
+    } else {
+      process.env.ANTHROPIC_AUTH_TOKEN = previousAuthToken;
+    }
+    await mock.close();
+  }
+});
+
 test("Agent 只在第一条用户消息中注入项目上下文", async () => {
   const requests = await captureRequests(async (url) => {
-    const agent = new Agent({ baseURL: url });
+    const agent = new Agent({ baseURL: url, apiKey: "mock" });
     await agent.chat("first message");
     await agent.chat("second message");
   });
@@ -49,31 +75,15 @@ test("Agent 只在第一条用户消息中注入项目上下文", async () => {
 });
 
 async function captureRequests(run) {
-  const captured = [];
-  const server = createServer((req, res) => {
-    let raw = "";
-    req.setEncoding("utf-8");
-    req.on("data", (chunk) => {
-      raw += chunk;
-    });
-    req.on("end", () => {
-      captured.push(JSON.parse(raw));
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ content: [{ type: "text", text: "done" }] }));
-    });
+  const mock = await startMockAnthropic({
+    response: { content: [{ type: "text", text: "done" }] },
   });
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const address = server.address();
-    assert.equal(typeof address, "object");
-    assert.ok(address);
-    await run(`http://127.0.0.1:${address.port}`);
-    assert.ok(captured.length > 0);
-    return captured;
+    await run(mock.url);
+    assert.ok(mock.requests.length > 0);
+    return mock.requests;
   } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
+    await mock.close();
   }
 }
