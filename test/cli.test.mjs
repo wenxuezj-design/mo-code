@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { startMockAnthropic } from "../mock/mock-anthropic.mjs";
+import { startMockLLM } from "../mock/mock-llm.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = resolve(projectRoot, "src", "cli", "main.ts");
@@ -638,7 +638,7 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     writeFileSync(join(sessionDir, `${sessionFile.id}.jsonl`), contents);
   }
 
-  const mock = await startMockAnthropic({
+  const mock = await startMockLLM({
     responses: options.responses,
     response: { content: [{ type: "text", text: "done" }] },
   });

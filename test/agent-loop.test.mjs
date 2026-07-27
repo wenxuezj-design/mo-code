@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { startMockAnthropic } from "../mock/mock-anthropic.mjs";
+import { startMockLLM } from "../mock/mock-llm.mjs";
 import { Agent } from "../src/agent-loop.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
@@ -35,7 +35,7 @@ test("Agent 支持注入基线 Prompt 进行 A/B 评测", async () => {
 
 test("Agent 不发送环境中继承的 Anthropic Auth Token", async () => {
   const previousAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
-  const mock = await startMockAnthropic({
+  const mock = await startMockLLM({
     response: { content: [{ type: "text", text: "done" }] },
   });
 
@@ -75,7 +75,7 @@ test("Agent 只在第一条用户消息中注入项目上下文", async () => {
 });
 
 async function captureRequests(run) {
-  const mock = await startMockAnthropic({
+  const mock = await startMockLLM({
     response: { content: [{ type: "text", text: "done" }] },
   });
 
