@@ -16,6 +16,7 @@ export type ContentBlock = Anthropic.ContentBlockParam;
 
 // 2. Model and tool definitions
 const MODEL = "claude-sonnet-4-6";
+const SMOOTH_OUTPUT_INTERVAL_MS = 10;
 
 type AgentOptions = {
   baseURL?: string;
@@ -23,6 +24,53 @@ type AgentOptions = {
   staticPrompt?: string;
   model?: string;
 };
+
+class SmoothTextWriter {
+  private characters: string[] = [];
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private ended = false;
+  private resolveDrained!: () => void;
+  private drained: Promise<void>;
+  hasText = false;
+
+  constructor() {
+    this.drained = new Promise((resolve) => {
+      this.resolveDrained = resolve;
+    });
+  }
+
+  write(text: string): void {
+    const characters = Array.from(text);
+    if (characters.length === 0) return;
+
+    this.hasText = true;
+    this.characters.push(...characters);
+    this.pump();
+  }
+
+  finish(): Promise<void> {
+    this.ended = true;
+    this.resolveIfDrained();
+    return this.drained;
+  }
+
+  private pump(): void {
+    if (this.timer || this.characters.length === 0) return;
+
+    process.stdout.write(this.characters.shift()!);
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.pump();
+      this.resolveIfDrained();
+    }, SMOOTH_OUTPUT_INTERVAL_MS);
+  }
+
+  private resolveIfDrained(): void {
+    if (this.ended && !this.timer && this.characters.length === 0) {
+      this.resolveDrained();
+    }
+  }
+}
 
 // 3. Agent Loop
 export class Agent {
@@ -60,7 +108,7 @@ export class Agent {
   }
 
   private async callAnthropicStream(): Promise<Anthropic.Message> {
-    let hasText = false;
+    const writer = new SmoothTextWriter();
     const stream = this.client.messages.stream({
       model: this.model,
       max_tokens: 4096,
@@ -70,12 +118,17 @@ export class Agent {
     });
 
     stream.on("text", (text) => {
-      hasText = true;
-      process.stdout.write(text);
+      writer.write(text);
     });
 
-    const reply = await stream.finalMessage();
-    if (hasText) process.stdout.write("\n");
+    let reply: Anthropic.Message;
+    try {
+      reply = await stream.finalMessage();
+    } finally {
+      await writer.finish();
+    }
+
+    if (writer.hasText) process.stdout.write("\n");
     return reply;
   }
 

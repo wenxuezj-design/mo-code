@@ -21,16 +21,19 @@ function captureTextWrites(output, onWrite = () => {}) {
 test("Agent 实时输出文本分片并保存完整消息", { timeout: 2_000 }, async () => {
   const mock = await startMockLLM({
     response: { content: [{ type: "text", text: "streamed" }] },
-    streamDelayMs: 50,
   });
   const output = [];
+  const writeTimes = [];
   let resolveFirstWrite;
   const firstWrite = new Promise((resolve) => {
     resolveFirstWrite = resolve;
   });
   let completed = false;
 
-  const originalWrite = captureTextWrites(output, resolveFirstWrite);
+  const originalWrite = captureTextWrites(output, () => {
+    writeTimes.push(performance.now());
+    resolveFirstWrite();
+  });
 
   try {
     const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
@@ -42,7 +45,8 @@ test("Agent 实时输出文本分片并保存完整消息", { timeout: 2_000 }, 
     assert.equal(completed, false);
     await chat;
 
-    assert.deepEqual(output, ["stre", "amed", "\n"]);
+    assert.deepEqual(output, [..."streamed", "\n"]);
+    assert.ok(writeTimes.at(-2) - writeTimes[0] >= 50);
     assert.equal(mock.requests[0].stream, true);
     assert.deepEqual(agent.getMessages().at(-1), {
       role: "assistant",
@@ -92,7 +96,7 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
     const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
     await agent.chat("read package.json");
 
-    assert.deepEqual(output, ["tool ", "done", "\n"]);
+    assert.deepEqual(output, [..."tool done", "\n"]);
     assert.equal(mock.requests.length, 2);
     assert.ok(mock.requests.every((request) => request.stream === true));
     assert.equal(mock.requests[1].messages.at(-1).content[0].type, "tool_result");
@@ -119,7 +123,7 @@ test("Agent 流失败时保留已输出文本但不保存残缺消息", async ()
     const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
     await assert.rejects(agent.chat("hello"), /without producing a Message/);
 
-    assert.deepEqual(output, ["part"]);
+    assert.deepEqual(output, [..."part"]);
     assert.equal(agent.getMessages().length, 1);
     assert.equal(agent.getMessages()[0].role, "user");
   } finally {
