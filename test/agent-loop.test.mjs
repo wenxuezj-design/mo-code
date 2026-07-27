@@ -5,6 +5,129 @@ import { startMockLLM } from "../mock/mock-llm.mjs";
 import { Agent } from "../src/agent-loop.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
+function captureTextWrites(output, onWrite = () => {}) {
+  const originalWrite = process.stdout.write;
+  process.stdout.write = function (chunk, ...args) {
+    if (typeof chunk === "string") {
+      output.push(chunk);
+      onWrite();
+      return true;
+    }
+    return Reflect.apply(originalWrite, process.stdout, [chunk, ...args]);
+  };
+  return originalWrite;
+}
+
+test("Agent 实时输出文本分片并保存完整消息", { timeout: 2_000 }, async () => {
+  const mock = await startMockLLM({
+    response: { content: [{ type: "text", text: "streamed" }] },
+    streamDelayMs: 50,
+  });
+  const output = [];
+  let resolveFirstWrite;
+  const firstWrite = new Promise((resolve) => {
+    resolveFirstWrite = resolve;
+  });
+  let completed = false;
+
+  const originalWrite = captureTextWrites(output, resolveFirstWrite);
+
+  try {
+    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const chat = agent.chat("hello").then(() => {
+      completed = true;
+    });
+
+    await firstWrite;
+    assert.equal(completed, false);
+    await chat;
+
+    assert.deepEqual(output, ["stre", "amed", "\n"]);
+    assert.equal(mock.requests[0].stream, true);
+    assert.deepEqual(agent.getMessages().at(-1), {
+      role: "assistant",
+      content: [{ type: "text", text: "streamed" }],
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+    await mock.close();
+  }
+});
+
+test("Agent 遇到无文本响应时不输出空行", async () => {
+  const mock = await startMockLLM({ response: { content: [] } });
+  const output = [];
+  const originalWrite = captureTextWrites(output);
+
+  try {
+    await new Agent({ baseURL: mock.url, apiKey: "mock" }).chat("hello");
+    assert.deepEqual(output, []);
+  } finally {
+    process.stdout.write = originalWrite;
+    await mock.close();
+  }
+});
+
+test("Agent 在完整工具调用形成后继续流式请求", async () => {
+  const mock = await startMockLLM({
+    responses: [
+      {
+        content: [{
+          type: "tool_use",
+          id: "toolu_mock_0",
+          name: "read_file",
+          input: { file_path: "package.json" },
+        }],
+        stop_reason: "tool_use",
+      },
+      { content: [{ type: "text", text: "tool done" }] },
+    ],
+  });
+  const output = [];
+  const originalWrite = captureTextWrites(output);
+  const originalLog = console.log;
+  console.log = () => {};
+
+  try {
+    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    await agent.chat("read package.json");
+
+    assert.deepEqual(output, ["tool ", "done", "\n"]);
+    assert.equal(mock.requests.length, 2);
+    assert.ok(mock.requests.every((request) => request.stream === true));
+    assert.equal(mock.requests[1].messages.at(-1).content[0].type, "tool_result");
+    assert.deepEqual(agent.getMessages().at(-1), {
+      role: "assistant",
+      content: [{ type: "text", text: "tool done" }],
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+    console.log = originalLog;
+    await mock.close();
+  }
+});
+
+test("Agent 流失败时保留已输出文本但不保存残缺消息", async () => {
+  const mock = await startMockLLM({
+    response: { content: [{ type: "text", text: "partial" }] },
+    streamEndAfterDeltas: 1,
+  });
+  const output = [];
+  const originalWrite = captureTextWrites(output);
+
+  try {
+    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    await assert.rejects(agent.chat("hello"), /without producing a Message/);
+
+    assert.deepEqual(output, ["part"]);
+    assert.equal(agent.getMessages().length, 1);
+    assert.equal(agent.getMessages()[0].role, "user");
+  } finally {
+    process.stdout.write = originalWrite;
+    await mock.close();
+  }
+});
+
 test("Agent 默认发送静态 System Prompt", async () => {
   const [request] = await captureRequests((url) => {
     return new Agent({ baseURL: url, apiKey: "mock" }).chat("hello");

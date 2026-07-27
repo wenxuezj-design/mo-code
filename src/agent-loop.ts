@@ -59,6 +59,26 @@ export class Agent {
     this.messages = structuredClone(messages);
   }
 
+  private async callAnthropicStream(): Promise<Anthropic.Message> {
+    let hasText = false;
+    const stream = this.client.messages.stream({
+      model: this.model,
+      max_tokens: 4096,
+      system: this.systemPrompt,
+      tools: toolDefinitions,
+      messages: this.messages,
+    });
+
+    stream.on("text", (text) => {
+      hasText = true;
+      process.stdout.write(text);
+    });
+
+    const reply = await stream.finalMessage();
+    if (hasText) process.stdout.write("\n");
+    return reply;
+  }
+
   async chat(userText: string): Promise<void> {
     const isFirstTurn = this.messages.length === 0;
     if (isFirstTurn) {
@@ -74,19 +94,7 @@ export class Agent {
     }
 
     while (true) {
-      const request = {
-        model: this.model,
-        max_tokens: 4096,
-        system: this.systemPrompt,
-        tools: toolDefinitions,
-        messages: this.messages,
-      };
-
-      const reply = await this.client.messages.create(request);
-      for (const block of reply.content) {
-        if (block.type === "text") process.stdout.write(block.text);
-      }
-      process.stdout.write("\n");
+      const reply = await this.callAnthropicStream();
 
       this.messages.push({ role: "assistant", content: reply.content });
 
