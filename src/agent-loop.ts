@@ -107,7 +107,9 @@ export class Agent {
     this.messages = structuredClone(messages);
   }
 
-  private async callAnthropicStream(): Promise<Anthropic.Message> {
+  private async callAnthropicStream(
+    onToolBlockComplete?: (block: Anthropic.ToolUseBlock) => void,
+  ): Promise<Anthropic.Message> {
     const writer = new SmoothTextWriter();
     const stream = this.client.messages.stream({
       model: this.model,
@@ -119,6 +121,14 @@ export class Agent {
 
     stream.on("text", (text) => {
       writer.write(text);
+    });
+    stream.on("streamEvent", (event, snapshot) => {
+      if (event.type !== "content_block_stop") return;
+
+      const block = snapshot.content[event.index];
+      if (block?.type === "tool_use") {
+        onToolBlockComplete?.(block);
+      }
     });
 
     let reply: Anthropic.Message;
@@ -147,13 +157,13 @@ export class Agent {
     }
 
     while (true) {
-      const reply = await this.callAnthropicStream();
+      const toolUses: Anthropic.ToolUseBlock[] = [];
+      const reply = await this.callAnthropicStream((block) => {
+        toolUses.push(block);
+      });
 
       this.messages.push({ role: "assistant", content: reply.content });
 
-      const toolUses = reply.content.filter(
-        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
-      );
       if (toolUses.length === 0) return;
 
       const results: Anthropic.ToolResultBlockParam[] = [];

@@ -76,12 +76,20 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
   const mock = await startMockLLM({
     responses: [
       {
-        content: [{
-          type: "tool_use",
-          id: "toolu_mock_0",
-          name: "read_file",
-          input: { file_path: "package.json" },
-        }],
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_mock_0",
+            name: "read_file",
+            input: { file_path: "package.json" },
+          },
+          {
+            type: "tool_use",
+            id: "toolu_mock_1",
+            name: "read_file",
+            input: { file_path: "AGENTS.md" },
+          },
+        ],
         stop_reason: "tool_use",
       },
       { content: [{ type: "text", text: "tool done" }] },
@@ -99,7 +107,27 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
     assert.deepEqual(output, [..."tool done", "\n"]);
     assert.equal(mock.requests.length, 2);
     assert.ok(mock.requests.every((request) => request.stream === true));
-    assert.equal(mock.requests[1].messages.at(-1).content[0].type, "tool_result");
+    assert.deepEqual(
+      mock.requests[1].messages.at(-1).content.map((block) => block.tool_use_id),
+      ["toolu_mock_0", "toolu_mock_1"],
+    );
+    assert.deepEqual(agent.getMessages()[1], {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_mock_0",
+          name: "read_file",
+          input: { file_path: "package.json" },
+        },
+        {
+          type: "tool_use",
+          id: "toolu_mock_1",
+          name: "read_file",
+          input: { file_path: "AGENTS.md" },
+        },
+      ],
+    });
     assert.deepEqual(agent.getMessages().at(-1), {
       role: "assistant",
       content: [{ type: "text", text: "tool done" }],

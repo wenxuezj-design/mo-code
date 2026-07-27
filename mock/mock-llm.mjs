@@ -151,14 +151,16 @@ function streamEvents(message) {
           input: {},
         },
       });
-      events.push({
-        type: "content_block_delta",
-        index,
-        delta: {
-          type: "input_json_delta",
-          partial_json: JSON.stringify(block.input),
-        },
-      });
+      for (const partialJson of splitText(JSON.stringify(block.input))) {
+        events.push({
+          type: "content_block_delta",
+          index,
+          delta: {
+            type: "input_json_delta",
+            partial_json: partialJson,
+          },
+        });
+      }
     } else {
       events.push({
         type: "content_block_start",
