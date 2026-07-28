@@ -4,6 +4,13 @@ import type { ToolContext } from "./types.ts";
 const MAX_RESULT_CHARS = 50000;
 const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
 
+export function isToolConcurrencySafe(
+  name: string,
+  input: Record<string, unknown>,
+): boolean {
+  return toolMap.get(name)?.isConcurrencySafe?.(input) ?? false;
+}
+
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,

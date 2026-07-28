@@ -28,5 +28,6 @@ export type ToolHandler = (
 
 export type Tool = ToolDef & {
   validateInput?: ToolValidator;
+  isConcurrencySafe?: (input: Record<string, unknown>) => boolean;
   execute: ToolHandler;
 };

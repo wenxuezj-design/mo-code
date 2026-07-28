@@ -8,7 +8,12 @@ import {
   buildUserContextReminder,
   type SystemPromptBlock,
 } from "./system-prompt.ts";
-import { executeTool, toolDefinitions } from "./tools/index.ts";
+import {
+  executeTool,
+  isToolConcurrencySafe,
+  toolDefinitions,
+  type ToolContext,
+} from "./tools/index.ts";
 
 // 1. Type definitions
 export type Message = Anthropic.MessageParam;
@@ -69,6 +74,113 @@ class SmoothTextWriter {
     if (this.ended && !this.timer && this.characters.length === 0) {
       this.resolveDrained();
     }
+  }
+}
+
+type ToolExecutor = (
+  name: string,
+  input: Record<string, unknown>,
+  context: ToolContext,
+) => Promise<string>;
+
+export class StreamingToolExecutor {
+  private toolUses: Anthropic.ToolUseBlock[] = [];
+  private earlyExecutions = new Map<string, Promise<string>>();
+  private reachedExecutionBarrier = false;
+  private context: ToolContext;
+  private execute: ToolExecutor;
+
+  constructor(
+    context: ToolContext,
+    execute: ToolExecutor = executeTool,
+  ) {
+    this.context = context;
+    this.execute = execute;
+  }
+
+  accept(block: Anthropic.ToolUseBlock): void {
+    this.toolUses.push(block);
+
+    if (!this.isConcurrencySafe(block)) {
+      this.reachedExecutionBarrier = true;
+      return;
+    }
+
+    if (!this.reachedExecutionBarrier) {
+      this.earlyExecutions.set(block.id, this.executeBlock(block));
+    }
+  }
+
+  async finish(): Promise<Anthropic.ToolResultBlockParam[]> {
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    let index = 0;
+
+    while (index < this.toolUses.length) {
+      const toolUse = this.toolUses[index];
+      const earlyExecution = this.earlyExecutions.get(toolUse.id);
+
+      if (earlyExecution) {
+        this.logToolUse(toolUse);
+        results.push(this.toToolResult(toolUse, await earlyExecution));
+        index++;
+        continue;
+      }
+
+      if (!this.isConcurrencySafe(toolUse)) {
+        this.logToolUse(toolUse);
+        results.push(this.toToolResult(toolUse, await this.executeBlock(toolUse)));
+        index++;
+        continue;
+      }
+
+      const batch: Anthropic.ToolUseBlock[] = [];
+      while (
+        index < this.toolUses.length
+        && this.isConcurrencySafe(this.toolUses[index])
+        && !this.earlyExecutions.has(this.toolUses[index].id)
+      ) {
+        batch.push(this.toolUses[index]);
+        index++;
+      }
+
+      for (const toolUse of batch) this.logToolUse(toolUse);
+      const outputs = await Promise.all(batch.map((toolUse) => this.executeBlock(toolUse)));
+      results.push(
+        ...batch.map((toolUse, batchIndex) => this.toToolResult(toolUse, outputs[batchIndex])),
+      );
+    }
+
+    return results;
+  }
+
+  private isConcurrencySafe(block: Anthropic.ToolUseBlock): boolean {
+    return isToolConcurrencySafe(
+      block.name,
+      block.input as Record<string, unknown>,
+    );
+  }
+
+  private executeBlock(block: Anthropic.ToolUseBlock): Promise<string> {
+    return this.execute(
+      block.name,
+      block.input as Record<string, unknown>,
+      this.context,
+    );
+  }
+
+  private logToolUse(block: Anthropic.ToolUseBlock): void {
+    console.log(`  -> ${block.name}(${JSON.stringify(block.input)})`);
+  }
+
+  private toToolResult(
+    block: Anthropic.ToolUseBlock,
+    output: string,
+  ): Anthropic.ToolResultBlockParam {
+    return {
+      type: "tool_result",
+      tool_use_id: block.id,
+      content: output,
+    };
   }
 }
 
@@ -157,25 +269,17 @@ export class Agent {
     }
 
     while (true) {
-      const toolUses: Anthropic.ToolUseBlock[] = [];
+      const toolExecutor = new StreamingToolExecutor({
+        readFileState: this.readFileState,
+      });
       const reply = await this.callAnthropicStream((block) => {
-        toolUses.push(block);
+        toolExecutor.accept(block);
       });
 
       this.messages.push({ role: "assistant", content: reply.content });
 
-      if (toolUses.length === 0) return;
-
-      const results: Anthropic.ToolResultBlockParam[] = [];
-      for (const toolUse of toolUses) {
-        console.log(`  -> ${toolUse.name}(${JSON.stringify(toolUse.input)})`);
-        const output = await executeTool(
-          toolUse.name,
-          toolUse.input as Record<string, unknown>,
-          { readFileState: this.readFileState },
-        );
-        results.push({ type: "tool_result", tool_use_id: toolUse.id, content: output });
-      }
+      const results = await toolExecutor.finish();
+      if (results.length === 0) return;
 
       this.messages.push({ role: "user", content: results });
     }

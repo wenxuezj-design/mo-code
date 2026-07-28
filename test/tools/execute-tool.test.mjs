@@ -4,7 +4,10 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { executeTool } from "../../src/tools/execute-tool.ts";
+import {
+  executeTool,
+  isToolConcurrencySafe,
+} from "../../src/tools/execute-tool.ts";
 import { toolDefinitions, tools } from "../../src/tools/index.ts";
 
 test("工具定义由工具对象派生且不暴露 execute", () => {
@@ -50,6 +53,18 @@ test("文件修改工具各自提供 validateInput", () => {
 
   assert.equal(typeof writeFileTool?.validateInput, "function");
   assert.equal(typeof editFileTool?.validateInput, "function");
+});
+
+test("工具自己声明并发安全性，未声明和未知工具默认不安全", () => {
+  for (const name of ["read_file", "list_files", "grep_search", "web_fetch"]) {
+    const tool = tools.find((item) => item.name === name);
+    assert.equal(typeof tool?.isConcurrencySafe, "function");
+    assert.equal(isToolConcurrencySafe(name, {}), true);
+  }
+
+  for (const name of ["write_file", "edit_file", "run_shell", "unknown_tool"]) {
+    assert.equal(isToolConcurrencySafe(name, {}), false);
+  }
 });
 
 test("executeTool 截断过长的工具结果并保留头尾", async () => {

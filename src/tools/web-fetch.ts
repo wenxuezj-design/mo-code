@@ -14,6 +14,7 @@ export const webFetchTool: Tool = {
     },
     required: ["url"],
   },
+  isConcurrencySafe: () => true,
   execute(input) {
     return webFetch({
       url: String(input.url ?? ""),

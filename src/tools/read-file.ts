@@ -13,6 +13,7 @@ export const readFileTool: Tool = {
     },
     required: ["file_path"],
   },
+  isConcurrencySafe: () => true,
   execute(input, context) {
     const filePath = String(input.file_path ?? "");
     const result = readFile({ file_path: filePath });
