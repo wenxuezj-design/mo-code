@@ -220,6 +220,14 @@ export class Agent {
     return this.model;
   }
 
+  isThinkingEnabled(): boolean {
+    return this.thinkingEnabled;
+  }
+
+  setThinkingEnabled(enabled: boolean): void {
+    this.thinkingEnabled = enabled;
+  }
+
   restoreMessages(messages: Message[]): void {
     this.messages = structuredClone(messages);
   }

@@ -154,6 +154,7 @@ test("/help 显示当前支持的 REPL 内置命令且不调用模型", async ()
   assert.match(result.stdout, /REPL 内置命令:/);
   assert.match(result.stdout, /\/help\s+显示这份帮助/);
   assert.match(result.stdout, /\/status\s+显示当前会话状态/);
+  assert.match(result.stdout, /\/thinking\s+切换 Extended Thinking/);
   assert.match(result.stdout, /\/exit, \/quit\s+退出交互模式/);
 });
 
@@ -170,6 +171,45 @@ test("/status 显示当前会话 ID、工作目录和模型且不调用模型", 
   );
   assert.match(result.stdout, new RegExp(`工作目录: ${escapeRegExp(projectRoot)}`));
   assert.match(result.stdout, /模型: mock/);
+  assert.match(result.stdout, /Thinking: 关闭/);
+});
+
+test("/thinking 切换后续请求的 Thinking 状态", async () => {
+  const result = await captureCliRequest(
+    [],
+    "/thinking\nfirst\n/thinking\nsecond\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "Thinking...\n");
+  assert.equal(result.requests.length, 2);
+  assert.deepEqual(result.requests[0].thinking, {
+    type: "enabled",
+    budget_tokens: 32_000,
+    display: "omitted",
+  });
+  assert.deepEqual(result.requests[1].thinking, { type: "disabled" });
+  assert.match(result.stdout, /Thinking: 开启/);
+  assert.match(result.stdout, /Thinking: 关闭/);
+  assert.ok(
+    result.sessions[0].records.every(
+      (record) => !Object.hasOwn(record, "thinking"),
+    ),
+  );
+});
+
+test("--thinking 决定交互模式的初始 Thinking 状态", async () => {
+  const result = await captureCliRequest(
+    ["--thinking"],
+    "/status\n/thinking\nnext\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 1);
+  assert.deepEqual(result.requests[0].thinking, { type: "disabled" });
+  assert.match(result.stdout, /Thinking: 开启/);
+  assert.match(result.stdout, /Thinking: 关闭/);
 });
 
 test("--print 缺少 Prompt 时直接退出", async () => {

@@ -6,6 +6,7 @@ import { appendSessionTurn, type SessionData } from "../session.ts";
 const REPL_HELP_TEXT = `REPL 内置命令:
   /help          显示这份帮助
   /status        显示当前会话状态
+  /thinking      切换 Extended Thinking
   /exit, /quit   退出交互模式
 `;
 
@@ -53,8 +54,13 @@ export async function runRepl(
       process.stdout.write(
         `会话 ID: ${session.id}\n`
         + `工作目录: ${session.cwd}\n`
-        + `模型: ${agent.getModel()}\n`,
+        + `模型: ${agent.getModel()}\n`
+        + `Thinking: ${agent.isThinkingEnabled() ? "开启" : "关闭"}\n`,
       );
+    } else if (input === "/thinking") {
+      const enabled = !agent.isThinkingEnabled();
+      agent.setThinkingEnabled(enabled);
+      process.stdout.write(`Thinking: ${enabled ? "开启" : "关闭"}\n`);
     } else if (input) {
       await runTurn(agent, session, input);
     }
