@@ -22,12 +22,15 @@ export type ContentBlock = Anthropic.ContentBlockParam;
 // 2. Model and tool definitions
 const MODEL = "claude-sonnet-4-6";
 const SMOOTH_OUTPUT_INTERVAL_MS = 10;
+const MAX_OUTPUT_TOKENS = 64_000;
+const THINKING_BUDGET_TOKENS = 32_000;
 
 type AgentOptions = {
   baseURL?: string;
   apiKey?: string;
   staticPrompt?: string;
   model?: string;
+  thinking?: boolean;
 };
 
 class SmoothTextWriter {
@@ -192,6 +195,7 @@ export class Agent {
   private systemPrompt: SystemPromptBlock[];
   private userContextReminder: string;
   private model: string;
+  private thinkingEnabled: boolean;
 
   constructor(options: AgentOptions = {}) {
     const staticPrompt = options.staticPrompt ?? SYSTEM_PROMPT_TEMPLATE;
@@ -205,6 +209,7 @@ export class Agent {
     this.systemPrompt = buildSystemPrompt(staticPrompt);
     this.userContextReminder = buildUserContextReminder();
     this.model = options.model ?? process.env.ANTHROPIC_MODEL ?? MODEL;
+    this.thinkingEnabled = options.thinking ?? false;
   }
 
   getMessages(): Message[] {
@@ -222,10 +227,22 @@ export class Agent {
   private async callAnthropicStream(
     onToolBlockComplete?: (block: Anthropic.ToolUseBlock) => void,
   ): Promise<Anthropic.Message> {
+    if (this.thinkingEnabled) {
+      process.stderr.write("Thinking...\n");
+    }
+
     const writer = new SmoothTextWriter();
+    const thinking: Anthropic.ThinkingConfigParam = this.thinkingEnabled
+      ? {
+          type: "enabled",
+          budget_tokens: THINKING_BUDGET_TOKENS,
+          display: "omitted",
+        }
+      : { type: "disabled" };
     const stream = this.client.messages.stream({
       model: this.model,
-      max_tokens: 4096,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      thinking,
       system: this.systemPrompt,
       tools: toolDefinitions,
       messages: this.messages,

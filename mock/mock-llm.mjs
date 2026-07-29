@@ -140,6 +140,31 @@ function streamEvents(message) {
           delta: { type: "text_delta", text },
         });
       }
+    } else if (block.type === "thinking") {
+      events.push({
+        type: "content_block_start",
+        index,
+        content_block: {
+          type: "thinking",
+          thinking: "",
+          signature: "",
+        },
+      });
+      for (const thinking of splitText(block.thinking)) {
+        events.push({
+          type: "content_block_delta",
+          index,
+          delta: { type: "thinking_delta", thinking },
+        });
+      }
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: {
+          type: "signature_delta",
+          signature: block.signature,
+        },
+      });
     } else if (block.type === "tool_use") {
       events.push({
         type: "content_block_start",

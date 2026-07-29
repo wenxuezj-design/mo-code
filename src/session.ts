@@ -253,6 +253,13 @@ function isContentBlock(value: unknown): boolean {
     return typeof value.tool_use_id === "string"
       && typeof value.content === "string";
   }
+  if (value.type === "thinking") {
+    return typeof value.thinking === "string"
+      && typeof value.signature === "string";
+  }
+  if (value.type === "redacted_thinking") {
+    return typeof value.data === "string";
+  }
   return false;
 }
 

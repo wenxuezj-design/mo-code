@@ -129,11 +129,17 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       return;
     }
 
-    agent = new Agent({ model: parsed.model ?? session.model });
+    agent = new Agent({
+      model: parsed.model ?? session.model,
+      thinking: parsed.thinking,
+    });
     agent.restoreMessages(session.messages);
     session.model = agent.getModel();
   } else {
-    agent = new Agent({ model: parsed.model });
+    agent = new Agent({
+      model: parsed.model,
+      thinking: parsed.thinking,
+    });
     session = createSession(process.cwd(), agent.getModel());
   }
 

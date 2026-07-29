@@ -8,10 +8,10 @@ Options:
   -r, --resume [id]                  恢复指定会话；未提供 ID 时从列表选择
       --delete-session [id]          删除会话；未提供 ID 时从列表选择
   -m, --model <model>                设置本次会话使用的模型
+      --thinking                     开启 Extended Thinking
       --permission-mode <mode>       设置权限模式
       --dangerously-skip-permissions 跳过权限检查，仅用于隔离环境
       --mortis                       --dangerously-skip-permissions 的别名
-      --effort <level>               设置模型的推理强度
       --max-budget-usd <amount>      限制本次运行的最大费用
 `;
 
@@ -22,6 +22,7 @@ export type ParsedArgs = {
   continueSession: boolean;
   resume: boolean;
   deleteSession: boolean;
+  thinking: boolean;
   model?: string;
   permissionMode?: string;
   resumeId?: string;
@@ -36,6 +37,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   let continueSession = false;
   let resume = false;
   let deleteSessionRequested = false;
+  let thinking = false;
   let model: string | undefined;
   let permissionMode: string | undefined;
   let resumeId: string | undefined;
@@ -54,6 +56,8 @@ export function parseArgs(args: string[]): ParsedArgs {
       continueSession = true;
     } else if (arg === "--model" || arg === "-m") {
       model = args[++i];
+    } else if (arg === "--thinking") {
+      thinking = true;
     } else if (arg === "--permission-mode") {
       permissionMode = args[++i];
     } else if (arg === "--resume" || arg === "-r") {
@@ -89,6 +93,7 @@ export function parseArgs(args: string[]): ParsedArgs {
     continueSession,
     resume,
     deleteSession: deleteSessionRequested,
+    thinking,
     model,
     permissionMode,
     resumeId,

@@ -139,6 +139,69 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
   }
 });
 
+test("Agent 在工具调用后原样传回 omitted Thinking block", async () => {
+  const thinkingBlock = {
+    type: "thinking",
+    thinking: "",
+    signature: "thinking-signature",
+  };
+  const mock = await startMockLLM({
+    responses: [
+      {
+        content: [
+          thinkingBlock,
+          {
+            type: "tool_use",
+            id: "toolu_thinking_0",
+            name: "read_file",
+            input: { file_path: "package.json" },
+          },
+        ],
+        stop_reason: "tool_use",
+      },
+      { content: [{ type: "text", text: "thinking done" }] },
+    ],
+  });
+  const output = [];
+  const errors = [];
+  const originalWrite = captureTextWrites(output);
+  const originalErrorWrite = process.stderr.write;
+  const originalLog = console.log;
+  process.stderr.write = function (chunk, ...args) {
+    if (typeof chunk === "string") {
+      errors.push(chunk);
+      return true;
+    }
+    return Reflect.apply(originalErrorWrite, process.stderr, [chunk, ...args]);
+  };
+  console.log = () => {};
+
+  try {
+    const agent = new Agent({
+      baseURL: mock.url,
+      apiKey: "mock",
+      thinking: true,
+    });
+    await agent.chat("analyze package.json");
+
+    assert.deepEqual(errors, ["Thinking...\n", "Thinking...\n"]);
+    assert.deepEqual(output, [..."thinking done", "\n"]);
+    assert.deepEqual(mock.requests[0].thinking, {
+      type: "enabled",
+      budget_tokens: 32_000,
+      display: "omitted",
+    });
+    assert.equal(mock.requests[0].max_tokens, 64_000);
+    assert.deepEqual(mock.requests[1].messages[1].content[0], thinkingBlock);
+    assert.deepEqual(agent.getMessages()[1].content[0], thinkingBlock);
+  } finally {
+    process.stdout.write = originalWrite;
+    process.stderr.write = originalErrorWrite;
+    console.log = originalLog;
+    await mock.close();
+  }
+});
+
 test("Agent 流失败时保留已输出文本但不保存残缺消息", async () => {
   const mock = await startMockLLM({
     response: { content: [{ type: "text", text: "partial" }] },

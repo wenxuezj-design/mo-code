@@ -41,6 +41,7 @@ test("--help 和 -h 显示 CLI 帮助后退出", () => {
     assert.match(result.stdout, /-p, --print/);
     assert.match(result.stdout, /-r, --resume \[id\]/);
     assert.match(result.stdout, /--delete-session \[id\]/);
+    assert.match(result.stdout, /--thinking/);
     assert.match(result.stdout, /--mortis/);
     assert.match(result.stdout, /--max-budget-usd <amount>/);
   }
@@ -68,8 +69,29 @@ test("--print 和 -p 执行位置参数中的单次任务", async () => {
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "done\n");
     assert.equal(result.requests.length, 1);
+    assert.deepEqual(result.requests[0].thinking, { type: "disabled" });
+    assert.equal(result.requests[0].max_tokens, 64_000);
     assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello world");
   }
+});
+
+test("--thinking 开启单次 Thinking 并将状态输出到 stderr", async () => {
+  const result = await captureCliRequest([
+    "--print",
+    "--thinking",
+    "analyze",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "done\n");
+  assert.equal(result.stderr, "Thinking...\n");
+  assert.deepEqual(result.requests[0].thinking, {
+    type: "enabled",
+    budget_tokens: 32_000,
+    display: "omitted",
+  });
+  assert.equal(result.requests[0].max_tokens, 64_000);
+  assert.equal(result.requests[0].messages[0].content.at(-1).text, "analyze");
 });
 
 test("--model 和 -m 设置单次任务使用的模型", async () => {

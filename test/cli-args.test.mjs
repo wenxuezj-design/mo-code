@@ -14,6 +14,7 @@ test("args 模块独立提供 CLI 参数解析和帮助文本", () => {
       continueSession: false,
       resume: false,
       deleteSession: false,
+      thinking: false,
       model: "test-model",
       permissionMode: undefined,
       resumeId: undefined,
