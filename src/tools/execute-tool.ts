@@ -16,12 +16,15 @@ export async function executeTool(
   input: Record<string, unknown>,
   context: ToolContext = { readFileState: new Map() },
 ): Promise<string> {
+  context.signal?.throwIfAborted();
+
   const tool = toolMap.get(name);
   if (!tool) return `Unknown tool: ${name}`;
 
   const validation = await tool.validateInput?.(input, context);
   if (validation && !validation.ok) return validation.message;
 
+  context.signal?.throwIfAborted();
   const result = await tool.execute(input, context);
   return truncateResult(result);
 }

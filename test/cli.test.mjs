@@ -212,6 +212,90 @@ test("--thinking 决定交互模式的初始 Thinking 状态", async () => {
   assert.match(result.stdout, /Thinking: 关闭/);
 });
 
+test("Ctrl+C 中断当前轮次后返回交互提示并继续对话", async () => {
+  const result = await captureCliRequest([], "", {
+    responses: [
+      { content: [{ type: "text", text: "abcdefghijklmnopqrstuvwxyz" }] },
+      { content: [{ type: "text", text: "done" }] },
+    ],
+    streamDelayMs: 200,
+    async drive({ child, mock, getStderr }) {
+      child.stdin.write("first\n");
+      await waitUntil(() => mock.requests.length === 1);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      child.kill("SIGINT");
+      await waitUntil(() => getStderr().includes("(interrupted)"));
+      child.stdin.end("second\n/exit\n");
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /\(interrupted\)/);
+  assert.equal(result.requests.length, 2);
+  assert.equal(result.requests[1].messages.at(-1).content, "second");
+  assert.equal(result.sessions.length, 1);
+  assert.deepEqual(
+    result.sessions[0].records.map(({ type }) => type),
+    ["session", "turn", "turn"],
+  );
+  assert.equal(result.sessions[0].records[1].messages.length, 1);
+  assert.equal(result.sessions[0].records[1].messages[0].role, "user");
+});
+
+test("空闲时连续两次 Ctrl+C 退出交互模式", async () => {
+  const result = await captureCliRequest([], "", {
+    async drive({ child, getStdout, getStderr }) {
+      await waitUntil(() => getStdout().includes("> "));
+      child.kill("SIGINT");
+      await waitUntil(() => getStderr().includes("Press Ctrl+C again to exit."));
+      child.kill("SIGINT");
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Press Ctrl\+C again to exit\./);
+  assert.match(result.stderr, /Bye!/);
+  assert.equal(result.requests.length, 0);
+});
+
+test("--print 被 Ctrl+C 中断后保存合法历史并以 130 退出", async () => {
+  const result = await captureCliRequest(
+    ["--print", "long task"],
+    "",
+    {
+      response: {
+        content: [{ type: "text", text: "abcdefghijklmnopqrstuvwxyz" }],
+      },
+      streamDelayMs: 200,
+      async drive({ child, mock }) {
+        await waitUntil(() => mock.requests.length === 1);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        child.kill("SIGINT");
+      },
+    },
+  );
+
+  assert.equal(result.status, 130);
+  assert.match(result.stderr, /\(interrupted\)/);
+  assert.equal(result.sessions.length, 1);
+  assert.equal(result.sessions[0].records[1].messages.length, 1);
+  assert.equal(result.sessions[0].records[1].messages[0].role, "user");
+
+  const saved = result.sessions[0];
+  const resumed = await captureCliRequest(
+    ["--print", "--resume", saved.data.id, "continue"],
+    "",
+    {
+      initialSession: saved.raw,
+      initialSessionId: saved.data.id,
+    },
+  );
+
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.equal(resumed.requests.length, 1);
+  assert.equal(resumed.requests[0].messages.at(-1).content, "continue");
+});
+
 test("--print 缺少 Prompt 时直接退出", async () => {
   const result = await captureCliRequest(["--print"]);
 
@@ -702,7 +786,8 @@ async function captureCliRequest(args, stdin = "", options = {}) {
 
   const mock = await startMockLLM({
     responses: options.responses,
-    response: { content: [{ type: "text", text: "done" }] },
+    response: options.response ?? { content: [{ type: "text", text: "done" }] },
+    streamDelayMs: options.streamDelayMs,
   });
 
   try {
@@ -732,12 +817,24 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.stdin.end(stdin);
-
-    const status = await new Promise((resolve, reject) => {
+    const statusPromise = new Promise((resolve, reject) => {
       child.on("error", reject);
       child.on("close", resolve);
     });
+
+    if (options.drive) {
+      await options.drive({
+        child,
+        mock,
+        getStdout: () => stdout,
+        getStderr: () => stderr,
+      });
+      if (!child.stdin.destroyed) child.stdin.end();
+    } else {
+      child.stdin.end(stdin);
+    }
+
+    const status = await statusPromise;
 
     const sessions = existsSync(sessionDir)
       ? readdirSync(sessionDir).map((filename) => {
@@ -822,4 +919,12 @@ function parseStoredSession(raw) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function waitUntil(condition) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("condition was not reached");
 }

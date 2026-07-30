@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 
 import { Agent } from "../agent-loop.ts";
 import { HELP_TEXT, parseArgs, type ParsedArgs } from "./args.ts";
-import { runRepl, runTurn } from "./conversation.ts";
+import { runPrintTurn, runRepl } from "./conversation.ts";
 import {
   confirmSessionDeletion,
   reportSkippedSessionFiles,
@@ -144,7 +144,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   }
 
   if (parsed.print) {
-    if (parsed.prompt) await runTurn(agent, session, parsed.prompt);
+    if (parsed.prompt) await runPrintTurn(agent, session, parsed.prompt);
     return;
   }
 

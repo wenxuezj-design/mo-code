@@ -223,6 +223,83 @@ test("Agent 流失败时保留已输出文本但不保存残缺消息", async ()
   }
 });
 
+test("Agent 中断模型流后丢弃待输出文字和残缺响应", { timeout: 2_000 }, async () => {
+  const text = "abcdefghijklmnopqrstuvwxyz";
+  const mock = await startMockLLM({
+    response: { content: [{ type: "text", text }] },
+    streamDelayMs: 200,
+  });
+  const output = [];
+  let resolveFirstWrite;
+  const firstWrite = new Promise((resolve) => {
+    resolveFirstWrite = resolve;
+  });
+  const originalWrite = captureTextWrites(output, resolveFirstWrite);
+
+  try {
+    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const chatting = agent.chat("hello");
+
+    await firstWrite;
+    assert.equal(agent.isProcessing(), true);
+    agent.abort();
+
+    assert.equal(await chatting, "interrupted");
+    assert.equal(agent.isProcessing(), false);
+    assert.ok(output.join("").length < text.length);
+    assert.equal(agent.getMessages().length, 1);
+    assert.equal(agent.getMessages()[0].role, "user");
+  } finally {
+    process.stdout.write = originalWrite;
+    await mock.close();
+  }
+});
+
+test("Agent 中断工具后补齐错误结果并停止后续模型请求", { timeout: 2_000 }, async () => {
+  const mock = await startMockLLM({
+    response: {
+      content: [{
+        type: "tool_use",
+        id: "toolu_shell_0",
+        name: "run_shell",
+        input: { command: "sleep 10" },
+      }],
+      stop_reason: "tool_use",
+    },
+  });
+  let resolveToolStart;
+  const toolStarted = new Promise((resolve) => {
+    resolveToolStart = resolve;
+  });
+  const originalLog = console.log;
+  console.log = (message) => {
+    if (String(message).includes("run_shell")) resolveToolStart();
+  };
+
+  try {
+    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const chatting = agent.chat("run a long command");
+
+    await toolStarted;
+    agent.abort();
+
+    assert.equal(await chatting, "interrupted");
+    assert.equal(mock.requests.length, 1);
+    assert.deepEqual(agent.getMessages().at(-1), {
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "toolu_shell_0",
+        content: "Interrupted by user.",
+        is_error: true,
+      }],
+    });
+  } finally {
+    console.log = originalLog;
+    await mock.close();
+  }
+});
+
 test("Agent 默认发送静态 System Prompt", async () => {
   const [request] = await captureRequests((url) => {
     return new Agent({ baseURL: url, apiKey: "mock" }).chat("hello");

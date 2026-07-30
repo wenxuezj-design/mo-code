@@ -15,15 +15,18 @@ export const webFetchTool: Tool = {
     required: ["url"],
   },
   isConcurrencySafe: () => true,
-  execute(input) {
+  execute(input, context) {
     return webFetch({
       url: String(input.url ?? ""),
       max_length: input.max_length === undefined ? undefined : Number(input.max_length),
-    });
+    }, context.signal);
   },
 };
 
-export async function webFetch(input: { url: string; max_length?: number }): Promise<string> {
+export async function webFetch(
+  input: { url: string; max_length?: number },
+  signal?: AbortSignal,
+): Promise<string> {
   if (!input.url.startsWith("http://") && !input.url.startsWith("https://")) {
     return "Error: only http(s) URLs are supported";
   }
@@ -31,6 +34,9 @@ export async function webFetch(input: { url: string; max_length?: number }): Pro
   const maxLength = input.max_length || 50000;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
+  const abortFromParent = () => controller.abort();
+  signal?.addEventListener("abort", abortFromParent, { once: true });
+  if (signal?.aborted) abortFromParent();
 
   try {
     const response = await fetch(input.url, {
@@ -55,12 +61,14 @@ export async function webFetch(input: { url: string; max_length?: number }): Pro
 
     return text || "(empty response)";
   } catch (error) {
+    if (signal?.aborted) throw error;
     if (error instanceof Error && error.name === "AbortError") {
       return "Error: Request timed out (30s)";
     }
     return `Error fetching ${input.url}: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromParent);
   }
 }
 

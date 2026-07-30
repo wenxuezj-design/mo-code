@@ -62,6 +62,51 @@ test("副作用工具形成屏障，屏障后的连续只读工具组成并行�
   ]);
 });
 
+test("中断时保留已完成结果，并为其余工具补齐错误结果", async () => {
+  const controller = new AbortController();
+  const started = [];
+  const executor = new StreamingToolExecutor(
+    { readFileState: new Map(), signal: controller.signal },
+    (_name, input, context) => {
+      const id = String(input.id);
+      started.push(id);
+      if (id === "read-a") return Promise.resolve("A");
+
+      return new Promise((_resolve, reject) => {
+        context.signal?.addEventListener(
+          "abort",
+          () => reject(context.signal?.reason),
+          { once: true },
+        );
+      });
+    },
+  );
+
+  executor.accept(toolUse("read-a", "read_file"));
+  executor.accept(toolUse("read-b", "read_file"));
+  executor.accept(toolUse("write-c", "write_file"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  controller.abort();
+
+  assert.deepEqual(await executor.finish(), [
+    { type: "tool_result", tool_use_id: "read-a", content: "A" },
+    {
+      type: "tool_result",
+      tool_use_id: "read-b",
+      content: "Interrupted by user.",
+      is_error: true,
+    },
+    {
+      type: "tool_result",
+      tool_use_id: "write-c",
+      content: "Interrupted by user.",
+      is_error: true,
+    },
+  ]);
+  assert.deepEqual(started, ["read-a", "read-b"]);
+});
+
 test("Agent 在模型流结束前启动已完成内容块中的安全工具", async () => {
   let resolveFetchStarted;
   const fetchStarted = new Promise((resolve) => {

@@ -10,6 +10,7 @@ export type ToolDef = {
 
 export type ToolContext = {
   readFileState: Map<string, number>;
+  signal?: AbortSignal;
 };
 
 export type ValidationResult =

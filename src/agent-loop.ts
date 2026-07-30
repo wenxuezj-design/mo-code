@@ -18,6 +18,7 @@ import {
 // 1. Type definitions
 export type Message = Anthropic.MessageParam;
 export type ContentBlock = Anthropic.ContentBlockParam;
+export type ChatResult = "completed" | "interrupted";
 
 // 2. Model and tool definitions
 const MODEL = "claude-sonnet-4-6";
@@ -62,6 +63,16 @@ class SmoothTextWriter {
     return this.drained;
   }
 
+  abort(): void {
+    this.ended = true;
+    this.characters = [];
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    this.resolveDrained();
+  }
+
   private pump(): void {
     if (this.timer || this.characters.length === 0) return;
 
@@ -86,9 +97,13 @@ type ToolExecutor = (
   context: ToolContext,
 ) => Promise<string>;
 
+type ToolExecutionOutcome =
+  | { status: "completed"; output: string }
+  | { status: "interrupted" };
+
 export class StreamingToolExecutor {
   private toolUses: Anthropic.ToolUseBlock[] = [];
-  private earlyExecutions = new Map<string, Promise<string>>();
+  private earlyExecutions = new Map<string, Promise<ToolExecutionOutcome>>();
   private reachedExecutionBarrier = false;
   private context: ToolContext;
   private execute: ToolExecutor;
@@ -129,6 +144,12 @@ export class StreamingToolExecutor {
         continue;
       }
 
+      if (this.context.signal?.aborted) {
+        results.push(this.toToolResult(toolUse, { status: "interrupted" }));
+        index++;
+        continue;
+      }
+
       if (!this.isConcurrencySafe(toolUse)) {
         this.logToolUse(toolUse);
         results.push(this.toToolResult(toolUse, await this.executeBlock(toolUse)));
@@ -156,6 +177,10 @@ export class StreamingToolExecutor {
     return results;
   }
 
+  async settle(): Promise<void> {
+    await Promise.all(this.earlyExecutions.values());
+  }
+
   private isConcurrencySafe(block: Anthropic.ToolUseBlock): boolean {
     return isToolConcurrencySafe(
       block.name,
@@ -163,12 +188,32 @@ export class StreamingToolExecutor {
     );
   }
 
-  private executeBlock(block: Anthropic.ToolUseBlock): Promise<string> {
-    return this.execute(
-      block.name,
-      block.input as Record<string, unknown>,
-      this.context,
-    );
+  private executeBlock(block: Anthropic.ToolUseBlock): Promise<ToolExecutionOutcome> {
+    if (this.context.signal?.aborted) {
+      return Promise.resolve({ status: "interrupted" });
+    }
+
+    let execution: Promise<string>;
+    try {
+      execution = this.execute(
+        block.name,
+        block.input as Record<string, unknown>,
+        this.context,
+      );
+    } catch (error) {
+      if (this.context.signal?.aborted) {
+        return Promise.resolve({ status: "interrupted" });
+      }
+      return Promise.reject(error);
+    }
+
+    return execution.then(
+        (output): ToolExecutionOutcome => ({ status: "completed", output }),
+        (error): ToolExecutionOutcome => {
+          if (this.context.signal?.aborted) return { status: "interrupted" };
+          throw error;
+        },
+      );
   }
 
   private logToolUse(block: Anthropic.ToolUseBlock): void {
@@ -177,12 +222,21 @@ export class StreamingToolExecutor {
 
   private toToolResult(
     block: Anthropic.ToolUseBlock,
-    output: string,
+    outcome: ToolExecutionOutcome,
   ): Anthropic.ToolResultBlockParam {
+    if (outcome.status === "interrupted") {
+      return {
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: "Interrupted by user.",
+        is_error: true,
+      };
+    }
+
     return {
       type: "tool_result",
       tool_use_id: block.id,
-      content: output,
+      content: outcome.output,
     };
   }
 }
@@ -196,6 +250,7 @@ export class Agent {
   private userContextReminder: string;
   private model: string;
   private thinkingEnabled: boolean;
+  private abortController: AbortController | undefined;
 
   constructor(options: AgentOptions = {}) {
     const staticPrompt = options.staticPrompt ?? SYSTEM_PROMPT_TEMPLATE;
@@ -228,11 +283,20 @@ export class Agent {
     this.thinkingEnabled = enabled;
   }
 
+  isProcessing(): boolean {
+    return this.abortController !== undefined;
+  }
+
+  abort(): void {
+    this.abortController?.abort();
+  }
+
   restoreMessages(messages: Message[]): void {
     this.messages = structuredClone(messages);
   }
 
   private async callAnthropicStream(
+    signal: AbortSignal,
     onToolBlockComplete?: (block: Anthropic.ToolUseBlock) => void,
   ): Promise<Anthropic.Message> {
     if (this.thinkingEnabled) {
@@ -247,14 +311,17 @@ export class Agent {
           display: "omitted",
         }
       : { type: "disabled" };
-    const stream = this.client.messages.stream({
-      model: this.model,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      thinking,
-      system: this.systemPrompt,
-      tools: toolDefinitions,
-      messages: this.messages,
-    });
+    const stream = this.client.messages.stream(
+      {
+        model: this.model,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        thinking,
+        system: this.systemPrompt,
+        tools: toolDefinitions,
+        messages: this.messages,
+      },
+      { signal },
+    );
 
     stream.on("text", (text) => {
       writer.write(text);
@@ -268,45 +335,79 @@ export class Agent {
       }
     });
 
+    const abortWriter = () => writer.abort();
+    signal.addEventListener("abort", abortWriter, { once: true });
+
     let reply: Anthropic.Message;
     try {
       reply = await stream.finalMessage();
     } finally {
-      await writer.finish();
+      if (signal.aborted) {
+        writer.abort();
+      } else {
+        await writer.finish();
+      }
+      signal.removeEventListener("abort", abortWriter);
     }
 
     if (writer.hasText) process.stdout.write("\n");
     return reply;
   }
 
-  async chat(userText: string): Promise<void> {
-    const isFirstTurn = this.messages.length === 0;
-    if (isFirstTurn) {
-      this.messages.push({
-        role: "user",
-        content: [
-          { type: "text", text: this.userContextReminder },
-          { type: "text", text: userText },
-        ],
-      });
-    } else {
-      this.messages.push({ role: "user", content: userText });
+  async chat(userText: string): Promise<ChatResult> {
+    if (this.abortController) {
+      throw new Error("Agent 已在处理请求");
     }
 
-    while (true) {
-      const toolExecutor = new StreamingToolExecutor({
-        readFileState: this.readFileState,
-      });
-      const reply = await this.callAnthropicStream((block) => {
-        toolExecutor.accept(block);
-      });
+    const controller = new AbortController();
+    const { signal } = controller;
+    this.abortController = controller;
 
-      this.messages.push({ role: "assistant", content: reply.content });
+    try {
+      const isFirstTurn = this.messages.length === 0;
+      if (isFirstTurn) {
+        this.messages.push({
+          role: "user",
+          content: [
+            { type: "text", text: this.userContextReminder },
+            { type: "text", text: userText },
+          ],
+        });
+      } else {
+        this.messages.push({ role: "user", content: userText });
+      }
 
-      const results = await toolExecutor.finish();
-      if (results.length === 0) return;
+      while (true) {
+        if (signal.aborted) return "interrupted";
 
-      this.messages.push({ role: "user", content: results });
+        const toolExecutor = new StreamingToolExecutor({
+          readFileState: this.readFileState,
+          signal,
+        });
+        let reply: Anthropic.Message;
+        try {
+          reply = await this.callAnthropicStream(signal, (block) => {
+            toolExecutor.accept(block);
+          });
+        } catch (error) {
+          if (!signal.aborted) throw error;
+          await toolExecutor.settle();
+          return "interrupted";
+        }
+
+        this.messages.push({ role: "assistant", content: reply.content });
+
+        const results = await toolExecutor.finish();
+        if (results.length > 0) {
+          this.messages.push({ role: "user", content: results });
+        }
+        if (signal.aborted) return "interrupted";
+        if (results.length === 0) return "completed";
+      }
+    } finally {
+      if (this.abortController === controller) {
+        this.abortController = undefined;
+      }
     }
   }
 }
