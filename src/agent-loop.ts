@@ -192,32 +192,24 @@ export class StreamingToolExecutor {
     );
   }
 
-  private executeBlock(block: Anthropic.ToolUseBlock): Promise<ToolExecutionOutcome> {
+  private async executeBlock(block: Anthropic.ToolUseBlock): Promise<ToolExecutionOutcome> {
     if (this.context.signal?.aborted) {
-      return Promise.resolve({ status: "interrupted" });
+      return { status: "interrupted" };
     }
 
-    let execution: Promise<string>;
     try {
-      execution = this.execute(
+      const output = await this.execute(
         block.name,
         block.input as Record<string, unknown>,
         this.context,
       );
+      return { status: "completed", output };
     } catch (error) {
       if (this.context.signal?.aborted) {
-        return Promise.resolve({ status: "interrupted" });
+        return { status: "interrupted" };
       }
-      return Promise.reject(error);
+      throw error;
     }
-
-    return execution.then(
-        (output): ToolExecutionOutcome => ({ status: "completed", output }),
-        (error): ToolExecutionOutcome => {
-          if (this.context.signal?.aborted) return { status: "interrupted" };
-          throw error;
-        },
-      );
   }
 
   private logToolUse(block: Anthropic.ToolUseBlock): void {
