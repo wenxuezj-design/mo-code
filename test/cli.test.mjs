@@ -172,6 +172,35 @@ test("/status 显示当前会话 ID、工作目录和模型且不调用模型", 
   assert.match(result.stdout, new RegExp(`工作目录: ${escapeRegExp(projectRoot)}`));
   assert.match(result.stdout, /模型: mock/);
   assert.match(result.stdout, /Thinking: 关闭/);
+  assert.match(result.stdout, /Prompt Cache 写入: 0 tokens/);
+  assert.match(result.stdout, /Prompt Cache 读取: 0 tokens/);
+});
+
+test("/status 显示当前进程累计的 Prompt Cache usage", async () => {
+  const result = await captureCliRequest(
+    [],
+    "hello\n/status\n/exit\n",
+    {
+      response: {
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_creation_input_tokens: 1200,
+          cache_read_input_tokens: 3400,
+        },
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 1);
+  assert.match(result.stdout, /Prompt Cache 写入: 1200 tokens/);
+  assert.match(result.stdout, /Prompt Cache 读取: 3400 tokens/);
+  assert.doesNotMatch(
+    result.sessions[0].raw,
+    /cache_(?:creation|read)_input_tokens/,
+  );
 });
 
 test("/thinking 切换后续请求的 Thinking 状态", async () => {

@@ -104,11 +104,14 @@ export async function runRepl(
       if (input === "/help") {
         process.stdout.write(REPL_HELP_TEXT);
       } else if (input === "/status") {
+        const cacheUsage = agent.getPromptCacheUsage();
         process.stdout.write(
           `会话 ID: ${session.id}\n`
           + `工作目录: ${session.cwd}\n`
           + `模型: ${agent.getModel()}\n`
-          + `Thinking: ${agent.isThinkingEnabled() ? "开启" : "关闭"}\n`,
+          + `Thinking: ${agent.isThinkingEnabled() ? "开启" : "关闭"}\n`
+          + `Prompt Cache 写入: ${cacheUsage.creationInputTokens} tokens\n`
+          + `Prompt Cache 读取: ${cacheUsage.readInputTokens} tokens\n`,
         );
       } else if (input === "/thinking") {
         const enabled = !agent.isThinkingEnabled();

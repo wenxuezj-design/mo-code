@@ -19,6 +19,10 @@ import {
 export type Message = Anthropic.MessageParam;
 export type ContentBlock = Anthropic.ContentBlockParam;
 export type ChatResult = "completed" | "interrupted";
+export type PromptCacheUsage = {
+  creationInputTokens: number;
+  readInputTokens: number;
+};
 
 // 2. Model and tool definitions
 const MODEL = "claude-sonnet-4-6";
@@ -251,6 +255,10 @@ export class Agent {
   private model: string;
   private thinkingEnabled: boolean;
   private abortController: AbortController | undefined;
+  private promptCacheUsage: PromptCacheUsage = {
+    creationInputTokens: 0,
+    readInputTokens: 0,
+  };
 
   constructor(options: AgentOptions = {}) {
     const staticPrompt = options.staticPrompt ?? SYSTEM_PROMPT_TEMPLATE;
@@ -277,6 +285,10 @@ export class Agent {
 
   isThinkingEnabled(): boolean {
     return this.thinkingEnabled;
+  }
+
+  getPromptCacheUsage(): PromptCacheUsage {
+    return { ...this.promptCacheUsage };
   }
 
   setThinkingEnabled(enabled: boolean): void {
@@ -315,6 +327,7 @@ export class Agent {
       {
         model: this.model,
         max_tokens: MAX_OUTPUT_TOKENS,
+        cache_control: { type: "ephemeral" },
         thinking,
         system: this.systemPrompt,
         tools: toolDefinitions,
@@ -351,6 +364,10 @@ export class Agent {
     }
 
     if (writer.hasText) process.stdout.write("\n");
+    this.promptCacheUsage.creationInputTokens +=
+      reply.usage.cache_creation_input_tokens ?? 0;
+    this.promptCacheUsage.readInputTokens +=
+      reply.usage.cache_read_input_tokens ?? 0;
     return reply;
   }
 

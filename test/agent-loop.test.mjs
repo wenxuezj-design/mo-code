@@ -305,6 +305,7 @@ test("Agent 默认发送静态 System Prompt", async () => {
     return new Agent({ baseURL: url, apiKey: "mock" }).chat("hello");
   });
 
+  assert.deepEqual(request.cache_control, { type: "ephemeral" });
   assert.deepEqual(request.system[0], {
     type: "text",
     text: SYSTEM_PROMPT_TEMPLATE,
@@ -312,6 +313,57 @@ test("Agent 默认发送静态 System Prompt", async () => {
   });
   assert.equal(request.system[1].type, "text");
   assert.match(request.system[1].text, /# Environment/);
+});
+
+test("Agent 累计每次完整模型响应的 Prompt Cache usage", async () => {
+  const mock = await startMockLLM({
+    responses: [
+      {
+        content: [{
+          type: "tool_use",
+          id: "toolu_cache_0",
+          name: "read_file",
+          input: { file_path: "package.json" },
+        }],
+        stop_reason: "tool_use",
+        usage: {
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_creation_input_tokens: 120,
+          cache_read_input_tokens: 10,
+        },
+      },
+      {
+        content: [],
+        usage: {
+          input_tokens: 30,
+          output_tokens: 0,
+          cache_creation_input_tokens: 30,
+          cache_read_input_tokens: 200,
+        },
+      },
+    ],
+  });
+  const originalLog = console.log;
+  console.log = () => {};
+
+  try {
+    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    await agent.chat("read package.json");
+
+    assert.equal(mock.requests.length, 2);
+    for (const request of mock.requests) {
+      assert.deepEqual(request.cache_control, { type: "ephemeral" });
+    }
+    assert.deepEqual(agent.getPromptCacheUsage(), {
+      creationInputTokens: 150,
+      readInputTokens: 210,
+    });
+    assert.doesNotMatch(JSON.stringify(agent.getMessages()), /cache_control/);
+  } finally {
+    console.log = originalLog;
+    await mock.close();
+  }
 });
 
 test("Agent 支持注入基线 Prompt 进行 A/B 评测", async () => {
