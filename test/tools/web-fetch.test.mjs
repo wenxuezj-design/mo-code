@@ -74,6 +74,26 @@ test("web_fetch 注册到工具列表并支持 executeTool 分发", async () => 
   });
 });
 
+test("web_fetch 收到 AbortSignal 后取消请求", async () => {
+  let requestStarted;
+  const started = new Promise((resolve) => {
+    requestStarted = resolve;
+  });
+  const controller = new AbortController();
+
+  await withServer((_req, _res) => {
+    requestStarted();
+  }, async (url) => {
+    const fetching = webFetch({ url }, controller.signal);
+    await started;
+    controller.abort();
+
+    await assert.rejects(fetching, (error) => (
+      error instanceof Error && error.name === "AbortError"
+    ));
+  });
+});
+
 async function withServer(handler, run) {
   const server = createServer(handler);
 

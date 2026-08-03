@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 
 import type { Tool } from "./types.ts";
 
@@ -13,57 +13,66 @@ export const runShellTool: Tool = {
     },
     required: ["command"],
   },
-  execute(input) {
+  execute(input, context) {
     return runShell({
       command: String(input.command ?? ""),
       timeout: input.timeout === undefined ? undefined : Number(input.timeout),
-    });
+    }, context.signal);
   },
 };
 
-export function runShell(input: { command: string; timeout?: number }): string {
-  try {
-    const result = execSync(input.command, {
+export function runShell(
+  input: { command: string; timeout?: number },
+  signal?: AbortSignal,
+): Promise<string> {
+  const timeout = input.timeout || 30000;
+
+  return new Promise((resolve, reject) => {
+    exec(input.command, {
       encoding: "utf-8",
       maxBuffer: 5 * 1024 * 1024,
-      timeout: input.timeout || 30000,
-      stdio: ["pipe", "pipe", "pipe"],
+      timeout,
+      signal,
       shell: process.platform === "win32" ? "powershell.exe" : "/bin/sh",
+    }, (error, stdout, stderr) => {
+      if (!error) {
+        resolve(stdout || "(no output)");
+        return;
+      }
+      if (signal?.aborted) {
+        reject(error);
+        return;
+      }
+
+      const output = `${stdout ? `\nStdout: ${stdout}` : ""}${stderr ? `\nStderr: ${stderr}` : ""}`;
+      if (isTimeoutError(error)) {
+        resolve(`Command timed out after ${timeout}ms${output}`);
+        return;
+      }
+
+      const exitCode = getExitCode(error);
+      if (exitCode !== undefined) {
+        resolve(`Command failed (exit code ${exitCode})${output}`);
+        return;
+      }
+      resolve(`Error: ${error.message}`);
     });
-
-    return result || "(no output)";
-  } catch (error) {
-    const stdout = getOutput(error, "stdout");
-    const stderr = getOutput(error, "stderr");
-    const output = `${stdout ? `\nStdout: ${stdout}` : ""}${stderr ? `\nStderr: ${stderr}` : ""}`;
-
-    if (isExecError(error) && isTimeoutError(error)) {
-      return `Command timed out after ${input.timeout || 30000}ms${output}`;
-    }
-    if (isExecError(error) && typeof error.status === "number") {
-      return `Command failed (exit code ${error.status})${output}`;
-    }
-    return `Error: ${error instanceof Error ? error.message : String(error)}`;
-  }
+  });
 }
 
-function isTimeoutError(error: NodeJS.ErrnoException & { status?: number | null; signal?: NodeJS.Signals | null }): boolean {
-  return error.code === "ETIMEDOUT" || (error.signal === "SIGTERM" && error.status === null);
+function isTimeoutError(
+  error: {
+    code?: string | number;
+    killed?: boolean;
+    signal?: NodeJS.Signals | null;
+  },
+): boolean {
+  return error.code === "ETIMEDOUT"
+    || (error.killed === true && error.signal === "SIGTERM");
 }
 
-function getOutput(error: unknown, key: "stdout" | "stderr"): string {
-  if (!isExecError(error)) return "";
-  const output = error[key];
-  return Buffer.isBuffer(output) ? output.toString("utf-8") : String(output ?? "");
-}
-
-function isExecError(
-  error: unknown,
-): error is NodeJS.ErrnoException & {
-  status?: number | null;
-  signal?: NodeJS.Signals | null;
-  stdout?: Buffer | string;
-  stderr?: Buffer | string;
-} {
-  return typeof error === "object" && error !== null;
+function getExitCode(
+  error: { code?: string | number },
+): number | undefined {
+  return typeof error.code === "number" ? error.code : undefined;
 }

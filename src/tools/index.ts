@@ -1,5 +1,6 @@
-export { executeTool } from "./execute-tool.ts";
+export { executeTool, isToolConcurrencySafe } from "./execute-tool.ts";
 export { toolDefinitions, tools } from "./registry.ts";
+
 export type {
   Tool,
   ToolContext,

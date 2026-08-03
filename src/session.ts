@@ -199,6 +199,7 @@ export function listSessions(cwd: string): SessionListResult {
   }
 
   // updatedAt 由 Date.toISOString() 生成，同一格式的字符串可直接比较先后。
+  // 倒序排序，时间新的会排在前面
   sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return { sessions, skippedFiles };
 }
@@ -251,6 +252,13 @@ function isContentBlock(value: unknown): boolean {
   if (value.type === "tool_result") {
     return typeof value.tool_use_id === "string"
       && typeof value.content === "string";
+  }
+  if (value.type === "thinking") {
+    return typeof value.thinking === "string"
+      && typeof value.signature === "string";
+  }
+  if (value.type === "redacted_thinking") {
+    return typeof value.data === "string";
   }
   return false;
 }

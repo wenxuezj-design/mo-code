@@ -20,6 +20,7 @@ export const grepSearchTool: Tool = {
     },
     required: ["pattern"],
   },
+  isConcurrencySafe: () => true,
   execute(input) {
     return grepSearch({
       pattern: String(input.pattern ?? ""),

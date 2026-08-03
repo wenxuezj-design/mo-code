@@ -86,6 +86,52 @@ test("deleteSession 对无效 ID 和不存在的会话给出明确错误", () =>
   );
 });
 
+test("loadSession 保留 thinking 和 redacted_thinking 内容块", () => {
+  const records = [
+    {
+      type: "session",
+      version: 1,
+      id: latestSessionId,
+      cwd: projectCwd,
+      model: "mock",
+      createdAt: "2026-07-14T07:00:00.000Z",
+    },
+    {
+      type: "turn",
+      timestamp: "2026-07-14T08:00:00.000Z",
+      model: "mock",
+      messages: [
+        { role: "user", content: "analyze" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "",
+              signature: "thinking-signature",
+            },
+            {
+              type: "redacted_thinking",
+              data: "encrypted-thinking",
+            },
+            { type: "text", text: "answer" },
+          ],
+        },
+      ],
+    },
+  ];
+  mkdirSync(sessionDir, { recursive: true });
+  writeFileSync(
+    join(sessionDir, `${latestSessionId}.jsonl`),
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+  );
+
+  assert.deepEqual(
+    sessionModule.loadSession(latestSessionId).messages[1].content,
+    records[1].messages[1].content,
+  );
+});
+
 function writeSession({ id, cwd, updatedAt }) {
   const records = [
     {

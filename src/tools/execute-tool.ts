@@ -4,17 +4,27 @@ import type { ToolContext } from "./types.ts";
 const MAX_RESULT_CHARS = 50000;
 const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
 
+export function isToolConcurrencySafe(
+  name: string,
+  input: Record<string, unknown>,
+): boolean {
+  return toolMap.get(name)?.isConcurrencySafe?.(input) ?? false;
+}
+
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
   context: ToolContext = { readFileState: new Map() },
 ): Promise<string> {
+  context.signal?.throwIfAborted();
+
   const tool = toolMap.get(name);
   if (!tool) return `Unknown tool: ${name}`;
 
   const validation = await tool.validateInput?.(input, context);
   if (validation && !validation.ok) return validation.message;
 
+  context.signal?.throwIfAborted();
   const result = await tool.execute(input, context);
   return truncateResult(result);
 }

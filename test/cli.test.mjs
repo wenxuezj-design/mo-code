@@ -8,13 +8,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 import assert from "node:assert/strict";
 import test from "node:test";
+
+import { startMockLLM } from "../mock/mock-llm.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = resolve(projectRoot, "src", "cli", "main.ts");
@@ -40,6 +41,7 @@ test("--help 和 -h 显示 CLI 帮助后退出", () => {
     assert.match(result.stdout, /-p, --print/);
     assert.match(result.stdout, /-r, --resume \[id\]/);
     assert.match(result.stdout, /--delete-session \[id\]/);
+    assert.match(result.stdout, /--thinking/);
     assert.match(result.stdout, /--mortis/);
     assert.match(result.stdout, /--max-budget-usd <amount>/);
   }
@@ -67,8 +69,29 @@ test("--print 和 -p 执行位置参数中的单次任务", async () => {
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "done\n");
     assert.equal(result.requests.length, 1);
+    assert.deepEqual(result.requests[0].thinking, { type: "disabled" });
+    assert.equal(result.requests[0].max_tokens, 64_000);
     assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello world");
   }
+});
+
+test("--thinking 开启单次 Thinking 并将状态输出到 stderr", async () => {
+  const result = await captureCliRequest([
+    "--print",
+    "--thinking",
+    "analyze",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "done\n");
+  assert.equal(result.stderr, "Thinking...\n");
+  assert.deepEqual(result.requests[0].thinking, {
+    type: "enabled",
+    budget_tokens: 32_000,
+    display: "omitted",
+  });
+  assert.equal(result.requests[0].max_tokens, 64_000);
+  assert.equal(result.requests[0].messages[0].content.at(-1).text, "analyze");
 });
 
 test("--model 和 -m 设置单次任务使用的模型", async () => {
@@ -131,6 +154,7 @@ test("/help 显示当前支持的 REPL 内置命令且不调用模型", async ()
   assert.match(result.stdout, /REPL 内置命令:/);
   assert.match(result.stdout, /\/help\s+显示这份帮助/);
   assert.match(result.stdout, /\/status\s+显示当前会话状态/);
+  assert.match(result.stdout, /\/thinking\s+切换 Extended Thinking/);
   assert.match(result.stdout, /\/exit, \/quit\s+退出交互模式/);
 });
 
@@ -147,6 +171,158 @@ test("/status 显示当前会话 ID、工作目录和模型且不调用模型", 
   );
   assert.match(result.stdout, new RegExp(`工作目录: ${escapeRegExp(projectRoot)}`));
   assert.match(result.stdout, /模型: mock/);
+  assert.match(result.stdout, /Thinking: 关闭/);
+  assert.match(result.stdout, /Prompt Cache 写入: 0 tokens/);
+  assert.match(result.stdout, /Prompt Cache 读取: 0 tokens/);
+});
+
+test("/status 显示当前进程累计的 Prompt Cache usage", async () => {
+  const result = await captureCliRequest(
+    [],
+    "hello\n/status\n/exit\n",
+    {
+      response: {
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_creation_input_tokens: 1200,
+          cache_read_input_tokens: 3400,
+        },
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 1);
+  assert.match(result.stdout, /Prompt Cache 写入: 1200 tokens/);
+  assert.match(result.stdout, /Prompt Cache 读取: 3400 tokens/);
+  assert.doesNotMatch(
+    result.sessions[0].raw,
+    /cache_(?:creation|read)_input_tokens/,
+  );
+});
+
+test("/thinking 切换后续请求的 Thinking 状态", async () => {
+  const result = await captureCliRequest(
+    [],
+    "/thinking\nfirst\n/thinking\nsecond\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "Thinking...\n");
+  assert.equal(result.requests.length, 2);
+  assert.deepEqual(result.requests[0].thinking, {
+    type: "enabled",
+    budget_tokens: 32_000,
+    display: "omitted",
+  });
+  assert.deepEqual(result.requests[1].thinking, { type: "disabled" });
+  assert.match(result.stdout, /Thinking: 开启/);
+  assert.match(result.stdout, /Thinking: 关闭/);
+  assert.ok(
+    result.sessions[0].records.every(
+      (record) => !Object.hasOwn(record, "thinking"),
+    ),
+  );
+});
+
+test("--thinking 决定交互模式的初始 Thinking 状态", async () => {
+  const result = await captureCliRequest(
+    ["--thinking"],
+    "/status\n/thinking\nnext\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 1);
+  assert.deepEqual(result.requests[0].thinking, { type: "disabled" });
+  assert.match(result.stdout, /Thinking: 开启/);
+  assert.match(result.stdout, /Thinking: 关闭/);
+});
+
+test("Ctrl+C 中断当前轮次后返回交互提示并继续对话", async () => {
+  const result = await captureCliRequest([], "", {
+    responses: [
+      { content: [{ type: "text", text: "abcdefghijklmnopqrstuvwxyz" }] },
+      { content: [{ type: "text", text: "done" }] },
+    ],
+    streamDelayMs: 200,
+    async drive({ child, mock, getStderr }) {
+      child.stdin.write("first\n");
+      await waitUntil(() => mock.requests.length === 1);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      child.kill("SIGINT");
+      await waitUntil(() => getStderr().includes("(interrupted)"));
+      child.stdin.end("second\n/exit\n");
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /\(interrupted\)/);
+  assert.equal(result.requests.length, 2);
+  assert.equal(result.requests[1].messages.at(-1).content, "second");
+  assert.equal(result.sessions.length, 1);
+  assert.deepEqual(
+    result.sessions[0].records.map(({ type }) => type),
+    ["session", "turn", "turn"],
+  );
+  assert.equal(result.sessions[0].records[1].messages.length, 1);
+  assert.equal(result.sessions[0].records[1].messages[0].role, "user");
+});
+
+test("空闲时连续两次 Ctrl+C 退出交互模式", async () => {
+  const result = await captureCliRequest([], "", {
+    async drive({ child, getStdout, getStderr }) {
+      await waitUntil(() => getStdout().includes("> "));
+      child.kill("SIGINT");
+      await waitUntil(() => getStderr().includes("Press Ctrl+C again to exit."));
+      child.kill("SIGINT");
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Press Ctrl\+C again to exit\./);
+  assert.match(result.stderr, /Bye!/);
+  assert.equal(result.requests.length, 0);
+});
+
+test("--print 被 Ctrl+C 中断后保存合法历史并以 130 退出", async () => {
+  const result = await captureCliRequest(
+    ["--print", "long task"],
+    "",
+    {
+      response: {
+        content: [{ type: "text", text: "abcdefghijklmnopqrstuvwxyz" }],
+      },
+      streamDelayMs: 200,
+      async drive({ child, mock }) {
+        await waitUntil(() => mock.requests.length === 1);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        child.kill("SIGINT");
+      },
+    },
+  );
+
+  assert.equal(result.status, 130);
+  assert.match(result.stderr, /\(interrupted\)/);
+  assert.equal(result.sessions.length, 1);
+  assert.equal(result.sessions[0].records[1].messages.length, 1);
+  assert.equal(result.sessions[0].records[1].messages[0].role, "user");
+
+  const saved = result.sessions[0];
+  const resumed = await captureCliRequest(
+    ["--print", "--resume", saved.data.id, "continue"],
+    "",
+    {
+      initialSession: saved.raw,
+      initialSessionId: saved.data.id,
+    },
+  );
+
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.equal(resumed.requests.length, 1);
+  assert.equal(resumed.requests[0].messages.at(-1).content, "continue");
 });
 
 test("--print 缺少 Prompt 时直接退出", async () => {
@@ -613,7 +789,6 @@ test("会话保存失败时警告但不中断后续对话", async () => {
 });
 
 async function captureCliRequest(args, stdin = "", options = {}) {
-  const requests = [];
   const testRoot = mkdtempSync(join(tmpdir(), "mo-code-cli-"));
   const home = options.invalidHome ? join(testRoot, "home-file") : join(testRoot, "home");
   if (options.invalidHome) {
@@ -638,27 +813,13 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     writeFileSync(join(sessionDir, `${sessionFile.id}.jsonl`), contents);
   }
 
-  const server = createServer((req, res) => {
-    let raw = "";
-    req.setEncoding("utf-8");
-    req.on("data", (chunk) => {
-      raw += chunk;
-    });
-    req.on("end", () => {
-      requests.push(JSON.parse(raw));
-      const response = options.responses?.[requests.length - 1]
-        ?? { content: [{ type: "text", text: "done" }] };
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(response));
-    });
+  const mock = await startMockLLM({
+    responses: options.responses,
+    response: options.response ?? { content: [{ type: "text", text: "done" }] },
+    streamDelayMs: options.streamDelayMs,
   });
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const address = server.address();
-    assert.equal(typeof address, "object");
-    assert.ok(address);
-
     const child = spawn(
       process.execPath,
       ["--no-warnings", "--experimental-strip-types", cliPath, ...args],
@@ -666,7 +827,9 @@ async function captureCliRequest(args, stdin = "", options = {}) {
         cwd: projectRoot,
         env: {
           ...process.env,
-          ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+          ANTHROPIC_API_KEY: "mock",
+          ANTHROPIC_BASE_URL: mock.url,
+          ANTHROPIC_MODEL: "mock",
           HOME: home,
         },
         stdio: ["pipe", "pipe", "pipe"],
@@ -683,12 +846,24 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.stdin.end(stdin);
-
-    const status = await new Promise((resolve, reject) => {
+    const statusPromise = new Promise((resolve, reject) => {
       child.on("error", reject);
       child.on("close", resolve);
     });
+
+    if (options.drive) {
+      await options.drive({
+        child,
+        mock,
+        getStdout: () => stdout,
+        getStderr: () => stderr,
+      });
+      if (!child.stdin.destroyed) child.stdin.end();
+    } else {
+      child.stdin.end(stdin);
+    }
+
+    const status = await statusPromise;
 
     const sessions = existsSync(sessionDir)
       ? readdirSync(sessionDir).map((filename) => {
@@ -704,11 +879,9 @@ async function captureCliRequest(args, stdin = "", options = {}) {
         })
       : [];
 
-    return { status, stdout, stderr, requests, sessions };
+    return { status, stdout, stderr, requests: mock.requests, sessions };
   } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
+    await mock.close();
     rmSync(testRoot, { recursive: true, force: true });
   }
 }
@@ -775,4 +948,12 @@ function parseStoredSession(raw) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function waitUntil(condition) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("condition was not reached");
 }
