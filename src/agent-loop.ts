@@ -3,6 +3,10 @@ import { pathToFileURL } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
 
 import {
+  PermissionGate,
+  allowAllPermissionPolicy,
+} from "./permissions/index.ts";
+import {
   SYSTEM_PROMPT_TEMPLATE,
   buildSystemPrompt,
   buildUserContextReminder,
@@ -13,6 +17,7 @@ import {
   isToolConcurrencySafe,
   toolDefinitions,
   type ToolContext,
+  type ToolExecutionResult,
 } from "./tools/index.ts";
 
 // 1. Type definitions
@@ -36,6 +41,7 @@ type AgentOptions = {
   staticPrompt?: string;
   model?: string;
   thinking?: boolean;
+  permissionGate?: PermissionGate;
 };
 
 class SmoothTextWriter {
@@ -99,10 +105,10 @@ type ToolExecutor = (
   name: string,
   input: Record<string, unknown>,
   context: ToolContext,
-) => Promise<string>;
+) => Promise<ToolExecutionResult>;
 
 type ToolExecutionOutcome =
-  | { status: "completed"; output: string }
+  | { status: "completed"; output: ToolExecutionResult }
   | { status: "interrupted" };
 
 export class StreamingToolExecutor {
@@ -229,11 +235,13 @@ export class StreamingToolExecutor {
       };
     }
 
-    return {
+    const result: Anthropic.ToolResultBlockParam = {
       type: "tool_result",
       tool_use_id: block.id,
-      content: outcome.output,
+      content: outcome.output.content,
     };
+    if (outcome.output.isError) result.is_error = true;
+    return result;
   }
 }
 
@@ -246,6 +254,8 @@ export class Agent {
   private userContextReminder: string;
   private model: string;
   private thinkingEnabled: boolean;
+  private cwd: string;
+  private permissionGate: PermissionGate;
   private abortController: AbortController | undefined;
   private promptCacheUsage: PromptCacheUsage = {
     creationInputTokens: 0,
@@ -265,6 +275,10 @@ export class Agent {
     this.userContextReminder = buildUserContextReminder();
     this.model = options.model ?? process.env.ANTHROPIC_MODEL ?? MODEL;
     this.thinkingEnabled = options.thinking ?? false;
+    this.cwd = process.cwd();
+    this.permissionGate = options.permissionGate ?? new PermissionGate({
+      policy: allowAllPermissionPolicy,
+    });
   }
 
   getMessages(): Message[] {
@@ -368,6 +382,7 @@ export class Agent {
       throw new Error("Agent 已在处理请求");
     }
 
+    /** 初始化创建控制器 */
     const controller = new AbortController();
     const { signal } = controller;
     this.abortController = controller;
@@ -390,6 +405,8 @@ export class Agent {
         if (signal.aborted) return "interrupted";
 
         const toolExecutor = new StreamingToolExecutor({
+          cwd: this.cwd,
+          permissionGate: this.permissionGate,
           readFileState: this.readFileState,
           signal,
         });

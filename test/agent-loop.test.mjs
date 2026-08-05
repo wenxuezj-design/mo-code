@@ -1,8 +1,12 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { startMockLLM } from "../mock/mock-llm.mjs";
 import { Agent } from "../src/agent-loop.ts";
+import { PermissionGate } from "../src/permissions/index.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
 function captureTextWrites(output, onWrite = () => {}) {
@@ -136,6 +140,56 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
     process.stdout.write = originalWrite;
     console.log = originalLog;
     await mock.close();
+  }
+});
+
+test("Agent 将权限拒绝作为错误工具结果返回模型", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mo-code-agent-permission-"));
+  const filePath = join(dir, "blocked.txt");
+  const mock = await startMockLLM({
+    responses: [
+      {
+        content: [{
+          type: "tool_use",
+          id: "toolu_denied_0",
+          name: "write_file",
+          input: { file_path: filePath, content: "blocked" },
+        }],
+        stop_reason: "tool_use",
+      },
+      { content: [] },
+    ],
+  });
+  const permissionGate = new PermissionGate({
+    policy: {
+      evaluate: () => ({ behavior: "deny", reason: "writes are blocked" }),
+    },
+  });
+  const originalLog = console.log;
+  console.log = () => {};
+
+  try {
+    const agent = new Agent({
+      baseURL: mock.url,
+      apiKey: "mock",
+      permissionGate,
+    });
+    await agent.chat("write a file");
+
+    assert.equal(existsSync(filePath), false);
+    assert.deepEqual(mock.requests[1].messages.at(-1), {
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "toolu_denied_0",
+        content: "Permission denied: writes are blocked",
+        is_error: true,
+      }],
+    });
+  } finally {
+    console.log = originalLog;
+    await mock.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

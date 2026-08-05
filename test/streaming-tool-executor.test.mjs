@@ -70,7 +70,9 @@ test("中断时保留已完成结果，并为其余工具补齐错误结果", as
     (_name, input, context) => {
       const id = String(input.id);
       started.push(id);
-      if (id === "read-a") return Promise.resolve("A");
+      if (id === "read-a") {
+        return Promise.resolve({ content: "A", isError: false });
+      }
 
       return new Promise((_resolve, reject) => {
         context.signal?.addEventListener(
@@ -186,7 +188,7 @@ function createControlledExecution() {
     resolve(id, output) {
       const complete = pending.get(id);
       assert.ok(complete, `${id} has not started`);
-      complete(output);
+      complete({ content: output, isError: false });
     },
   };
 }

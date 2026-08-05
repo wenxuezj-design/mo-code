@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { PermissionGate } from "../../src/permissions/index.ts";
 import { executeTool, toolDefinitions } from "../../src/tools/index.ts";
 import { webFetch } from "../../src/tools/web-fetch.ts";
 
@@ -68,9 +69,13 @@ test("web_fetch 注册到工具列表并支持 executeTool 分发", async () => 
   }, async (url) => {
     assert.ok(toolDefinitions.some((tool) => tool.name === "web_fetch"));
 
-    const result = await executeTool("web_fetch", { url });
+    const result = await executeTool("web_fetch", { url }, {
+      cwd: process.cwd(),
+      permissionGate: new PermissionGate(),
+      readFileState: new Map(),
+    });
 
-    assert.equal(result, "registered");
+    assert.deepEqual(result, { content: "registered", isError: false });
   });
 });
 
