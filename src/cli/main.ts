@@ -58,10 +58,6 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     return;
   }
 
-  if (parsed.permissionMode) {
-    process.stderr.write("Warning: --permission-mode 暂未实现权限控制\n");
-  }
-
   if (parsed.deleteSession) {
     try {
       let sessionId: string;
@@ -132,6 +128,8 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     agent = new Agent({
       model: parsed.model ?? session.model,
       thinking: parsed.thinking,
+      permissionMode: parsed.permissionMode,
+      allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
     });
     agent.restoreMessages(session.messages);
     session.model = agent.getModel();
@@ -139,6 +137,8 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     agent = new Agent({
       model: parsed.model,
       thinking: parsed.thinking,
+      permissionMode: parsed.permissionMode,
+      allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
     });
     session = createSession(process.cwd(), agent.getModel());
   }

@@ -18,6 +18,7 @@ import {
   isToolConcurrencySafe,
 } from "../../src/tools/execute-tool.ts";
 import { toolDefinitions } from "../../src/tools/index.ts";
+import { tools } from "../../src/tools/registry.ts";
 
 test("公共工具定义不暴露 execute", () => {
   assert.deepEqual(
@@ -35,6 +36,40 @@ test("公共工具定义不暴露 execute", () => {
   assert.ok(toolDefinitions.every((tool) => {
     return Object.keys(tool).sort().join(",") === "description,input_schema,name";
   }));
+});
+
+test("每个工具声明自己的权限类别", () => {
+  assert.deepEqual(
+    Object.fromEntries(tools.map((tool) => [tool.name, tool.permissionKind])),
+    {
+      read_file: "read",
+      write_file: "edit",
+      edit_file: "edit",
+      list_files: "read",
+      grep_search: "read",
+      run_shell: "shell",
+      web_fetch: "network",
+    },
+  );
+});
+
+test("executeTool 把工具权限类别传给 PermissionGate", async () => {
+  let receivedRequest;
+  const permissionGate = new PermissionGate({
+    policy: {
+      evaluate(request) {
+        receivedRequest = request;
+        return { behavior: "allow" };
+      },
+    },
+  });
+
+  await executeTool("list_files", { pattern: "no-match-*" }, createContext({
+    permissionGate,
+  }));
+
+  assert.equal(receivedRequest.toolName, "list_files");
+  assert.equal(receivedRequest.permissionKind, "read");
 });
 
 test("executeTool 要求显式提供 PermissionGate", async () => {

@@ -1,3 +1,5 @@
+import type { PermissionMode } from "../permissions/index.ts";
+
 export const HELP_TEXT = `Usage: mo-code [options] [prompt...]
 
 Options:
@@ -11,9 +13,18 @@ Options:
       --thinking                     开启 Extended Thinking
       --permission-mode <mode>       设置权限模式
       --dangerously-skip-permissions 跳过权限检查，仅用于隔离环境
-      --mortis                       --dangerously-skip-permissions 的别名
+      --allow-dangerously-skip-permissions
+                                     允许在交互模式中切换为跳过权限检查
       --max-budget-usd <amount>      限制本次运行的最大费用
 `;
+
+const PERMISSION_MODES = new Set<PermissionMode>([
+  "default",
+  "acceptEdits",
+  "plan",
+  "dontAsk",
+  "bypassPermissions",
+]);
 
 export type ParsedArgs = {
   help: boolean;
@@ -23,8 +34,9 @@ export type ParsedArgs = {
   resume: boolean;
   deleteSession: boolean;
   thinking: boolean;
+  allowDangerouslySkipPermissions: boolean;
   model?: string;
-  permissionMode?: string;
+  permissionMode?: PermissionMode;
   resumeId?: string;
   deleteSessionId?: string;
   prompt?: string;
@@ -38,8 +50,10 @@ export function parseArgs(args: string[]): ParsedArgs {
   let resume = false;
   let deleteSessionRequested = false;
   let thinking = false;
+  let dangerouslySkipPermissions = false;
+  let allowDangerouslySkipPermissions = false;
   let model: string | undefined;
-  let permissionMode: string | undefined;
+  let permissionMode: PermissionMode | undefined;
   let resumeId: string | undefined;
   let deleteSessionId: string | undefined;
   const positional: string[] = [];
@@ -59,7 +73,20 @@ export function parseArgs(args: string[]): ParsedArgs {
     } else if (arg === "--thinking") {
       thinking = true;
     } else if (arg === "--permission-mode") {
-      permissionMode = args[++i];
+      const mode = args[++i];
+      if (!mode || mode.startsWith("-")) {
+        throw new Error("--permission-mode 缺少模式");
+      }
+      if (!PERMISSION_MODES.has(mode as PermissionMode)) {
+        throw new Error(`无效的权限模式: ${mode}`);
+      }
+      permissionMode = mode as PermissionMode;
+    } else if (arg === "--dangerously-skip-permissions") {
+      dangerouslySkipPermissions = true;
+    } else if (arg === "--allow-dangerously-skip-permissions") {
+      allowDangerouslySkipPermissions = true;
+    } else if (arg === "--mortis") {
+      throw new Error("未知参数: --mortis");
     } else if (arg === "--resume" || arg === "-r") {
       resume = true;
       const sessionId = args[i + 1];
@@ -85,6 +112,19 @@ export function parseArgs(args: string[]): ParsedArgs {
   if (deleteSessionRequested && (continueSession || resume)) {
     throw new Error("--delete-session 不能和 --continue 或 --resume 同时使用");
   }
+  if (
+    dangerouslySkipPermissions
+    && permissionMode !== undefined
+    && permissionMode !== "bypassPermissions"
+  ) {
+    throw new Error(
+      "--dangerously-skip-permissions 不能和其他 --permission-mode 同时使用",
+    );
+  }
+  if (dangerouslySkipPermissions) {
+    permissionMode = "bypassPermissions";
+    allowDangerouslySkipPermissions = true;
+  }
 
   return {
     help,
@@ -94,6 +134,7 @@ export function parseArgs(args: string[]): ParsedArgs {
     resume,
     deleteSession: deleteSessionRequested,
     thinking,
+    allowDangerouslySkipPermissions,
     model,
     permissionMode,
     resumeId,

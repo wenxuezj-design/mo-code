@@ -4,6 +4,7 @@ import type { Tool } from "./types.ts";
 
 export const listFilesTool: Tool = {
   name: "list_files",
+  permissionKind: "read",
   description: "List files matching a glob pattern. Returns matching file paths.",
   input_schema: {
     type: "object",

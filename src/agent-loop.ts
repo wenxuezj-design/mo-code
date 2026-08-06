@@ -4,7 +4,9 @@ import Anthropic from "@anthropic-ai/sdk";
 
 import {
   PermissionGate,
-  allowAllPermissionPolicy,
+  PermissionModePolicy,
+  type PermissionMode,
+  type PermissionPrompter,
 } from "./permissions/index.ts";
 import {
   SYSTEM_PROMPT_TEMPLATE,
@@ -41,7 +43,9 @@ type AgentOptions = {
   staticPrompt?: string;
   model?: string;
   thinking?: boolean;
-  permissionGate?: PermissionGate;
+  permissionMode?: PermissionMode;
+  allowDangerouslySkipPermissions?: boolean;
+  permissionPrompter?: PermissionPrompter;
 };
 
 class SmoothTextWriter {
@@ -256,6 +260,8 @@ export class Agent {
   private thinkingEnabled: boolean;
   private cwd: string;
   private permissionGate: PermissionGate;
+  private permissionModePolicy: PermissionModePolicy;
+  private bypassPermissionsAvailable: boolean;
   private abortController: AbortController | undefined;
   private promptCacheUsage: PromptCacheUsage = {
     creationInputTokens: 0,
@@ -276,9 +282,18 @@ export class Agent {
     this.model = options.model ?? process.env.ANTHROPIC_MODEL ?? MODEL;
     this.thinkingEnabled = options.thinking ?? false;
     this.cwd = process.cwd();
-    this.permissionGate = options.permissionGate ?? new PermissionGate({
-      policy: allowAllPermissionPolicy,
+    this.permissionModePolicy = new PermissionModePolicy(
+      options.permissionMode ?? "default",
+    );
+    this.permissionGate = new PermissionGate({
+      policy: this.permissionModePolicy,
+      prompter: options.permissionPrompter,
     });
+    // 通过参数显式启用危险模式，或者Agent初始化时模式是危险模式
+    // this.permissionModePolicy.getMode() 的初始化值受 --permission-mode 控制
+    this.bypassPermissionsAvailable =
+      options.allowDangerouslySkipPermissions === true
+      || this.permissionModePolicy.getMode() === "bypassPermissions";
   }
 
   getMessages(): Message[] {
@@ -299,6 +314,27 @@ export class Agent {
 
   setThinkingEnabled(enabled: boolean): void {
     this.thinkingEnabled = enabled;
+  }
+
+  getPermissionMode(): PermissionMode {
+    return this.permissionModePolicy.getMode();
+  }
+
+  setPermissionMode(mode: PermissionMode): void {
+    if (this.isProcessing()) {
+      throw new Error("Agent 正在处理请求，不能切换权限模式");
+    }
+    /** 准备切换的权限模式是危险模式，且已开放权限模式 */
+    if (mode === "bypassPermissions" && !this.bypassPermissionsAvailable) {
+      throw new Error(
+        "bypassPermissions 未启用，请使用 --allow-dangerously-skip-permissions 重新启动",
+      );
+    }
+    this.permissionModePolicy.setMode(mode);
+  }
+
+  isBypassPermissionsAvailable(): boolean {
+    return this.bypassPermissionsAvailable;
   }
 
   isProcessing(): boolean {

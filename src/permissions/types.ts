@@ -1,5 +1,15 @@
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "plan"
+  | "dontAsk"
+  | "bypassPermissions";
+
+export type PermissionKind = "read" | "edit" | "shell" | "network";
+
 export type PermissionRequest = {
   toolName: string;
+  permissionKind: PermissionKind;
   input: Record<string, unknown>;
   cwd: string;
   signal?: AbortSignal;

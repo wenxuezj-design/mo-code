@@ -5,6 +5,7 @@ import { PermissionGate } from "../src/permissions/index.ts";
 
 const request = {
   toolName: "run_shell",
+  permissionKind: "shell",
   input: { command: "pnpm test" },
   cwd: "/project",
 };

@@ -4,6 +4,7 @@ import type { Tool } from "./types.ts";
 
 export const grepSearchTool: Tool = {
   name: "grep_search",
+  permissionKind: "read",
   description: "Search for a regex pattern in files. Returns matching lines with file paths and line numbers.",
   input_schema: {
     type: "object",

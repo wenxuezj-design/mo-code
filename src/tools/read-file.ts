@@ -5,6 +5,7 @@ import type { Tool } from "./types.ts";
 
 export const readFileTool: Tool = {
   name: "read_file",
+  permissionKind: "read",
   description: "Read the contents of a file. Returns the file content with line numbers.",
   input_schema: {
     type: "object",

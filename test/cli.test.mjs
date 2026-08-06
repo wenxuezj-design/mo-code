@@ -42,7 +42,10 @@ test("--help 和 -h 显示 CLI 帮助后退出", () => {
     assert.match(result.stdout, /-r, --resume \[id\]/);
     assert.match(result.stdout, /--delete-session \[id\]/);
     assert.match(result.stdout, /--thinking/);
-    assert.match(result.stdout, /--mortis/);
+    assert.match(result.stdout, /--permission-mode <mode>/);
+    assert.match(result.stdout, /--dangerously-skip-permissions/);
+    assert.match(result.stdout, /--allow-dangerously-skip-permissions/);
+    assert.doesNotMatch(result.stdout, /--mortis/);
     assert.match(result.stdout, /--max-budget-usd <amount>/);
   }
 });
@@ -110,7 +113,7 @@ test("--model 和 -m 设置单次任务使用的模型", async () => {
   }
 });
 
-test("--permission-mode 提示权限控制尚未实现", async () => {
+test("--permission-mode 设置本次运行的权限模式", async () => {
   const result = await captureCliRequest([
     "--print",
     "--permission-mode",
@@ -119,9 +122,41 @@ test("--permission-mode 提示权限控制尚未实现", async () => {
   ]);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stderr, "Warning: --permission-mode 暂未实现权限控制\n");
+  assert.equal(result.stderr, "");
   assert.equal(result.requests.length, 1);
   assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello");
+});
+
+test("权限模式参数缺失、无效或冲突时明确报错", async () => {
+  const cases = [
+    {
+      args: ["--permission-mode"],
+      message: "--permission-mode 缺少模式",
+    },
+    {
+      args: ["--permission-mode", "unknown"],
+      message: "无效的权限模式: unknown",
+    },
+    {
+      args: [
+        "--permission-mode",
+        "plan",
+        "--dangerously-skip-permissions",
+      ],
+      message: "--dangerously-skip-permissions 不能和其他 --permission-mode 同时使用",
+    },
+    {
+      args: ["--mortis"],
+      message: "未知参数: --mortis",
+    },
+  ];
+
+  for (const { args, message } of cases) {
+    const result = await captureCliRequest(args);
+    assert.equal(result.status, 1);
+    assert.equal(result.requests.length, 0);
+    assert.equal(result.stderr, `Error: ${message}\n`);
+  }
 });
 
 test("不带 --print 的 Prompt 进入交互模式", async () => {
@@ -154,6 +189,7 @@ test("/help 显示当前支持的 REPL 内置命令且不调用模型", async ()
   assert.match(result.stdout, /REPL 内置命令:/);
   assert.match(result.stdout, /\/help\s+显示这份帮助/);
   assert.match(result.stdout, /\/status\s+显示当前会话状态/);
+  assert.match(result.stdout, /\/permission-mode\s+选择权限模式/);
   assert.match(result.stdout, /\/thinking\s+切换 Extended Thinking/);
   assert.match(result.stdout, /\/exit, \/quit\s+退出交互模式/);
 });
@@ -171,9 +207,69 @@ test("/status 显示当前会话 ID、工作目录和模型且不调用模型", 
   );
   assert.match(result.stdout, new RegExp(`工作目录: ${escapeRegExp(projectRoot)}`));
   assert.match(result.stdout, /模型: mock/);
+  assert.match(result.stdout, /权限模式: default/);
   assert.match(result.stdout, /Thinking: 关闭/);
   assert.match(result.stdout, /Prompt Cache 写入: 0 tokens/);
   assert.match(result.stdout, /Prompt Cache 读取: 0 tokens/);
+});
+
+test("/permission-mode 通过编号切换当前进程的权限模式", async () => {
+  const result = await captureCliRequest(
+    [],
+    "/permission-mode\n3\n/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /选择权限模式:/);
+  assert.match(result.stdout, /1\. default（当前）/);
+  assert.match(result.stdout, /3\. plan/);
+  assert.match(result.stdout, /权限模式: plan/);
+});
+
+test("/permission-mode 对无效输入重试，并阻止未开放的 bypassPermissions", async () => {
+  const result = await captureCliRequest(
+    [],
+    "/permission-mode\ninvalid\n5\nq\n/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /5\. bypassPermissions（未开放）/);
+  assert.match(result.stdout, /请输入 1 到 5 之间的编号，或输入 q 取消/);
+  assert.match(
+    result.stdout,
+    /bypassPermissions 未开放，请使用 --allow-dangerously-skip-permissions 重新启动/,
+  );
+  assert.match(result.stdout, /已取消/);
+  assert.match(result.stdout, /权限模式: default/);
+});
+
+test("--allow-dangerously-skip-permissions 允许在 REPL 中切换 bypassPermissions", async () => {
+  const result = await captureCliRequest(
+    ["--allow-dangerously-skip-permissions"],
+    "/permission-mode\n5\n/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.doesNotMatch(result.stdout, /bypassPermissions（未开放）/);
+  assert.match(result.stdout, /权限模式: bypassPermissions/);
+});
+
+test("--dangerously-skip-permissions 直接进入 bypassPermissions", async () => {
+  const result = await captureCliRequest(
+    ["--dangerously-skip-permissions"],
+    "/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /权限模式: bypassPermissions/);
 });
 
 test("/status 显示当前进程累计的 Prompt Cache usage", async () => {

@@ -6,6 +6,7 @@ import type { Tool } from "./types.ts";
 
 export const writeFileTool: Tool = {
   name: "write_file",
+  permissionKind: "edit",
   description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
   input_schema: {
     type: "object",

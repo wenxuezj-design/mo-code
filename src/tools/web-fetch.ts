@@ -2,6 +2,7 @@ import type { Tool } from "./types.ts";
 
 export const webFetchTool: Tool = {
   name: "web_fetch",
+  permissionKind: "network",
   description: "Fetch a URL and return its content as text. For HTML pages, tags are stripped to return readable text. For JSON/text responses, content is returned directly.",
   input_schema: {
     type: "object",

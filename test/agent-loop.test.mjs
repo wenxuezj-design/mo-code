@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 
 import { startMockLLM } from "../mock/mock-llm.mjs";
 import { Agent } from "../src/agent-loop.ts";
-import { PermissionGate } from "../src/permissions/index.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
 function captureTextWrites(output, onWrite = () => {}) {
@@ -76,6 +75,31 @@ test("Agent 遇到无文本响应时不输出空行", async () => {
   }
 });
 
+test("Agent 默认使用 default 权限模式并支持会话内切换", () => {
+  const agent = new Agent({ apiKey: "mock" });
+
+  assert.equal(agent.getPermissionMode(), "default");
+  assert.equal(agent.isBypassPermissionsAvailable(), false);
+
+  agent.setPermissionMode("plan");
+  assert.equal(agent.getPermissionMode(), "plan");
+  assert.throws(
+    () => agent.setPermissionMode("bypassPermissions"),
+    /--allow-dangerously-skip-permissions/,
+  );
+});
+
+test("Agent 只在显式开放后允许切换到 bypassPermissions", () => {
+  const agent = new Agent({
+    apiKey: "mock",
+    allowDangerouslySkipPermissions: true,
+  });
+
+  assert.equal(agent.isBypassPermissionsAvailable(), true);
+  agent.setPermissionMode("bypassPermissions");
+  assert.equal(agent.getPermissionMode(), "bypassPermissions");
+});
+
 test("Agent 在完整工具调用形成后继续流式请求", async () => {
   const mock = await startMockLLM({
     responses: [
@@ -143,7 +167,7 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
   }
 });
 
-test("Agent 将权限拒绝作为错误工具结果返回模型", async () => {
+test("Agent 切换权限模式后立即改变实际工具授权结果", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mo-code-agent-permission-"));
   const filePath = join(dir, "blocked.txt");
   const mock = await startMockLLM({
@@ -158,12 +182,17 @@ test("Agent 将权限拒绝作为错误工具结果返回模型", async () => {
         stop_reason: "tool_use",
       },
       { content: [] },
+      {
+        content: [{
+          type: "tool_use",
+          id: "toolu_allowed_0",
+          name: "write_file",
+          input: { file_path: filePath, content: "allowed" },
+        }],
+        stop_reason: "tool_use",
+      },
+      { content: [] },
     ],
-  });
-  const permissionGate = new PermissionGate({
-    policy: {
-      evaluate: () => ({ behavior: "deny", reason: "writes are blocked" }),
-    },
   });
   const originalLog = console.log;
   console.log = () => {};
@@ -172,7 +201,7 @@ test("Agent 将权限拒绝作为错误工具结果返回模型", async () => {
     const agent = new Agent({
       baseURL: mock.url,
       apiKey: "mock",
-      permissionGate,
+      permissionMode: "plan",
     });
     await agent.chat("write a file");
 
@@ -182,8 +211,21 @@ test("Agent 将权限拒绝作为错误工具结果返回模型", async () => {
       content: [{
         type: "tool_result",
         tool_use_id: "toolu_denied_0",
-        content: "Permission denied: writes are blocked",
+        content: 'Permission denied: Permission mode "plan" blocks edit tools',
         is_error: true,
+      }],
+    });
+
+    agent.setPermissionMode("acceptEdits");
+    await agent.chat("write the file now");
+
+    assert.equal(existsSync(filePath), true);
+    assert.deepEqual(mock.requests[3].messages.at(-1), {
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "toolu_allowed_0",
+        content: "Successfully wrote to " + filePath,
       }],
     });
   } finally {

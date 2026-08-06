@@ -1,4 +1,7 @@
-import type { PermissionGate } from "../permissions/index.ts";
+import type {
+  PermissionGate,
+  PermissionKind,
+} from "../permissions/index.ts";
 
 export type ToolDef = {
   name: string;
@@ -37,6 +40,7 @@ export type ToolHandler = (
 ) => Promise<string | ToolExecutionResult> | string | ToolExecutionResult;
 
 export type Tool = ToolDef & {
+  permissionKind: PermissionKind;
   validateInput?: ToolValidator;
   isConcurrencySafe?: (input: Record<string, unknown>) => boolean;
   execute: ToolHandler;

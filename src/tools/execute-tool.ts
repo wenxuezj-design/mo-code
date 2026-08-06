@@ -34,6 +34,7 @@ export async function executeTool(
   /** 得到权限验证后的结果（是否同意，同意会携带结果）*/
   const authorization = await context.permissionGate.authorize({
     toolName: name,
+    permissionKind: tool.permissionKind,
     input,
     cwd: context.cwd,
     signal: context.signal,
