@@ -5,6 +5,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   PermissionGate,
   PermissionModePolicy,
+  PermissionRulePolicy,
+  loadPermissionSettings,
+  type LoadedPermissionSettings,
   type PermissionMode,
   type PermissionPrompter,
 } from "./permissions/index.ts";
@@ -26,8 +29,25 @@ import {
 export type Message = Anthropic.MessageParam;
 export type ContentBlock = Anthropic.ContentBlockParam;
 export type ChatResult = "completed" | "interrupted";
+
+/** 用来累计当前 Agent 进程中的 Prompt Cache 使用量 
+ * 
+* 举个例子，现在新员工入职，我们给他一本100页的行动指南
+* 
+* 第1次，我们问了他一个问题：告诉我如何报销，他阅读了解相关知识，那么这里 写入就是：100页的信息，命中信息是0，因为之前他并不知道相关问题
+* 
+* 第2次，我们换了个问题：告诉我如何休假。那么这里他只需要回忆起之前的内容解答就行，所以这次写入是0，命中是100
+* 
+* 大概是这样，根据问题的相关性，命中的程度也会有所不同，另外要说下是不存在百分比命中的情况，因为提问也属于信息，所以每次都会出现新内容。
+* 
+* 比如说100页的token是10000，我们提问是20，即使完全命中也是 10000/10020。
+* 
+* 另外，根据情况，补充新的信息或者信息发生变化也是可能的，可能会变成50页命中信息，30页信息这样
+*/
 export type PromptCacheUsage = {
+  /** 写入新缓存的输入 token 数 */
   creationInputTokens: number;
+  /** 命中并读取已有缓存输入的 token 数 */
   readInputTokens: number;
 };
 
@@ -46,6 +66,7 @@ type AgentOptions = {
   permissionMode?: PermissionMode;
   allowDangerouslySkipPermissions?: boolean;
   permissionPrompter?: PermissionPrompter;
+  permissionSettings?: LoadedPermissionSettings;
 };
 
 class SmoothTextWriter {
@@ -98,7 +119,11 @@ class SmoothTextWriter {
     }, SMOOTH_OUTPUT_INTERVAL_MS);
   }
 
+  /** 平滑文字输出是否彻底结束 */
   private resolveIfDrained(): void {
+    // 已经调用结束方法，不会加入新文字
+    // 且 没有正在执行的输出定时器
+    // 且 待输出的字符串缓冲区已经清空
     if (this.ended && !this.timer && this.characters.length === 0) {
       this.resolveDrained();
     }
@@ -282,18 +307,25 @@ export class Agent {
     this.model = options.model ?? process.env.ANTHROPIC_MODEL ?? MODEL;
     this.thinkingEnabled = options.thinking ?? false;
     this.cwd = process.cwd();
+    const permissionSettings = options.permissionSettings
+      ?? loadPermissionSettings({ cwd: this.cwd });
     this.permissionModePolicy = new PermissionModePolicy(
-      options.permissionMode ?? "default",
+      options.permissionMode ?? permissionSettings.defaultMode ?? "default",
     );
     this.permissionGate = new PermissionGate({
-      policy: this.permissionModePolicy,
+      policy: new PermissionRulePolicy(
+        permissionSettings.rules,
+        this.permissionModePolicy,
+        toolDefinitions.map((tool) => tool.name),
+      ),
       prompter: options.permissionPrompter,
     });
-    // 通过参数显式启用危险模式，或者Agent初始化时模式是危险模式
-    // this.permissionModePolicy.getMode() 的初始化值受 --permission-mode 控制
+    // 危险模式必须由 CLI 参数或配置显式启用；CLI 可以覆盖本次启动的初始模式，
+    // 但配置中启用过 bypassPermissions 时，仍允许用户在当前会话切换回来。
     this.bypassPermissionsAvailable =
       options.allowDangerouslySkipPermissions === true
-      || this.permissionModePolicy.getMode() === "bypassPermissions";
+      || this.permissionModePolicy.getMode() === "bypassPermissions"
+      || permissionSettings.defaultMode === "bypassPermissions";
   }
 
   getMessages(): Message[] {

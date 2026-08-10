@@ -1,10 +1,13 @@
 import { execFileSync } from "node:child_process";
 
+import { normalizePermissionPath } from "./permission-target.ts";
 import type { Tool } from "./types.ts";
 
 export const grepSearchTool: Tool = {
   name: "grep_search",
   permissionKind: "read",
+  getPermissionTarget: (input, context) =>
+    normalizePermissionPath(context.cwd, String(input.path ?? ".")),
   description: "Search for a regex pattern in files. Returns matching lines with file paths and line numbers.",
   input_schema: {
     type: "object",

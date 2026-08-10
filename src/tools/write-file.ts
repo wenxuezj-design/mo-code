@@ -2,11 +2,14 @@ import { dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 import { recordFileState, validateFileMutation } from "./file-state.ts";
+import { normalizePermissionPath } from "./permission-target.ts";
 import type { Tool } from "./types.ts";
 
 export const writeFileTool: Tool = {
   name: "write_file",
   permissionKind: "edit",
+  getPermissionTarget: (input, context) =>
+    normalizePermissionPath(context.cwd, String(input.file_path ?? "")),
   description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
   input_schema: {
     type: "object",

@@ -147,6 +147,7 @@ test("Agent 在模型流结束前启动已完成内容块中的安全工具", as
       baseURL: mock.url,
       apiKey: "mock",
       permissionMode: "bypassPermissions",
+      permissionSettings: { rules: [] },
     })
       .chat("fetch")
       .then(() => {

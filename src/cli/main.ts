@@ -125,21 +125,31 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       return;
     }
 
-    agent = new Agent({
-      model: parsed.model ?? session.model,
-      thinking: parsed.thinking,
-      permissionMode: parsed.permissionMode,
-      allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
-    });
+    try {
+      agent = new Agent({
+        model: parsed.model ?? session.model,
+        thinking: parsed.thinking,
+        permissionMode: parsed.permissionMode,
+        allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
+      });
+    } catch (error) {
+      reportCliError(error);
+      return;
+    }
     agent.restoreMessages(session.messages);
     session.model = agent.getModel();
   } else {
-    agent = new Agent({
-      model: parsed.model,
-      thinking: parsed.thinking,
-      permissionMode: parsed.permissionMode,
-      allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
-    });
+    try {
+      agent = new Agent({
+        model: parsed.model,
+        thinking: parsed.thinking,
+        permissionMode: parsed.permissionMode,
+        allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
+      });
+    } catch (error) {
+      reportCliError(error);
+      return;
+    }
     session = createSession(process.cwd(), agent.getModel());
   }
 

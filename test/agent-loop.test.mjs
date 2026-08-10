@@ -8,6 +8,13 @@ import { startMockLLM } from "../mock/mock-llm.mjs";
 import { Agent } from "../src/agent-loop.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
+function createAgent(options = {}) {
+  return new Agent({
+    permissionSettings: { rules: [] },
+    ...options,
+  });
+}
+
 function captureTextWrites(output, onWrite = () => {}) {
   const originalWrite = process.stdout.write;
   process.stdout.write = function (chunk, ...args) {
@@ -39,7 +46,7 @@ test("Agent 实时输出文本分片并保存完整消息", { timeout: 2_000 }, 
   });
 
   try {
-    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const agent = createAgent({ baseURL: mock.url, apiKey: "mock" });
     const chat = agent.chat("hello").then(() => {
       completed = true;
     });
@@ -67,7 +74,7 @@ test("Agent 遇到无文本响应时不输出空行", async () => {
   const originalWrite = captureTextWrites(output);
 
   try {
-    await new Agent({ baseURL: mock.url, apiKey: "mock" }).chat("hello");
+    await createAgent({ baseURL: mock.url, apiKey: "mock" }).chat("hello");
     assert.deepEqual(output, []);
   } finally {
     process.stdout.write = originalWrite;
@@ -76,7 +83,7 @@ test("Agent 遇到无文本响应时不输出空行", async () => {
 });
 
 test("Agent 默认使用 default 权限模式并支持会话内切换", () => {
-  const agent = new Agent({ apiKey: "mock" });
+  const agent = createAgent({ apiKey: "mock" });
 
   assert.equal(agent.getPermissionMode(), "default");
   assert.equal(agent.isBypassPermissionsAvailable(), false);
@@ -90,7 +97,7 @@ test("Agent 默认使用 default 权限模式并支持会话内切换", () => {
 });
 
 test("Agent 只在显式开放后允许切换到 bypassPermissions", () => {
-  const agent = new Agent({
+  const agent = createAgent({
     apiKey: "mock",
     allowDangerouslySkipPermissions: true,
   });
@@ -98,6 +105,31 @@ test("Agent 只在显式开放后允许切换到 bypassPermissions", () => {
   assert.equal(agent.isBypassPermissionsAvailable(), true);
   agent.setPermissionMode("bypassPermissions");
   assert.equal(agent.getPermissionMode(), "bypassPermissions");
+});
+
+test("Agent 使用配置默认模式，命令行模式覆盖后仍保留配置开放的 bypass", () => {
+  const configured = createAgent({
+    apiKey: "mock",
+    permissionSettings: {
+      rules: [],
+      defaultMode: "plan",
+    },
+  });
+  assert.equal(configured.getPermissionMode(), "plan");
+
+  const overridden = createAgent({
+    apiKey: "mock",
+    permissionMode: "plan",
+    permissionSettings: {
+      rules: [],
+      defaultMode: "bypassPermissions",
+    },
+  });
+  assert.equal(overridden.getPermissionMode(), "plan");
+  assert.equal(overridden.isBypassPermissionsAvailable(), true);
+
+  overridden.setPermissionMode("bypassPermissions");
+  assert.equal(overridden.getPermissionMode(), "bypassPermissions");
 });
 
 test("Agent 在完整工具调用形成后继续流式请求", async () => {
@@ -129,7 +161,7 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
   console.log = () => {};
 
   try {
-    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const agent = createAgent({ baseURL: mock.url, apiKey: "mock" });
     await agent.chat("read package.json");
 
     assert.deepEqual(output, [..."tool done", "\n"]);
@@ -198,7 +230,7 @@ test("Agent 切换权限模式后立即改变实际工具授权结果", async ()
   console.log = () => {};
 
   try {
-    const agent = new Agent({
+    const agent = createAgent({
       baseURL: mock.url,
       apiKey: "mock",
       permissionMode: "plan",
@@ -226,6 +258,61 @@ test("Agent 切换权限模式后立即改变实际工具授权结果", async ()
         type: "tool_result",
         tool_use_id: "toolu_allowed_0",
         content: "Successfully wrote to " + filePath,
+      }],
+    });
+  } finally {
+    console.log = originalLog;
+    await mock.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Agent 将配置规则应用到真实工具授权", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mo-code-agent-rule-"));
+  const filePath = join(dir, "blocked.txt");
+  const sourcePath = "/project/.mo-code/settings.json";
+  const mock = await startMockLLM({
+    responses: [
+      {
+        content: [{
+          type: "tool_use",
+          id: "toolu_rule_denied_0",
+          name: "write_file",
+          input: { file_path: filePath, content: "blocked" },
+        }],
+        stop_reason: "tool_use",
+      },
+      { content: [] },
+    ],
+  });
+  const originalLog = console.log;
+  console.log = () => {};
+
+  try {
+    const agent = createAgent({
+      baseURL: mock.url,
+      apiKey: "mock",
+      permissionMode: "acceptEdits",
+      permissionSettings: {
+        rules: [{
+          behavior: "deny",
+          raw: "write_file",
+          sourceScope: "project",
+          sourcePath,
+        }],
+      },
+    });
+    await agent.chat("write a file");
+
+    assert.equal(existsSync(filePath), false);
+    assert.deepEqual(mock.requests[1].messages.at(-1), {
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "toolu_rule_denied_0",
+        content: "Permission denied: Permission rule \"write_file\" from "
+          + `${sourcePath} denies this action`,
+        is_error: true,
       }],
     });
   } finally {
@@ -273,7 +360,7 @@ test("Agent 在工具调用后原样传回 omitted Thinking block", async () => 
   console.log = () => {};
 
   try {
-    const agent = new Agent({
+    const agent = createAgent({
       baseURL: mock.url,
       apiKey: "mock",
       thinking: true,
@@ -307,7 +394,7 @@ test("Agent 流失败时保留已输出文本但不保存残缺消息", async ()
   const originalWrite = captureTextWrites(output);
 
   try {
-    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const agent = createAgent({ baseURL: mock.url, apiKey: "mock" });
     await assert.rejects(agent.chat("hello"), /without producing a Message/);
 
     assert.deepEqual(output, [..."part"]);
@@ -333,7 +420,7 @@ test("Agent 中断模型流后丢弃待输出文字和残缺响应", { timeout: 
   const originalWrite = captureTextWrites(output, resolveFirstWrite);
 
   try {
-    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const agent = createAgent({ baseURL: mock.url, apiKey: "mock" });
     const chatting = agent.chat("hello");
 
     await firstWrite;
@@ -373,7 +460,7 @@ test("Agent 中断工具后补齐错误结果并停止后续模型请求", { tim
   };
 
   try {
-    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const agent = createAgent({ baseURL: mock.url, apiKey: "mock" });
     const chatting = agent.chat("run a long command");
 
     await toolStarted;
@@ -398,7 +485,7 @@ test("Agent 中断工具后补齐错误结果并停止后续模型请求", { tim
 
 test("Agent 默认发送静态 System Prompt", async () => {
   const [request] = await captureRequests((url) => {
-    return new Agent({ baseURL: url, apiKey: "mock" }).chat("hello");
+    return createAgent({ baseURL: url, apiKey: "mock" }).chat("hello");
   });
 
   assert.deepEqual(request.cache_control, { type: "ephemeral" });
@@ -444,7 +531,7 @@ test("Agent 累计每次完整模型响应的 Prompt Cache usage", async () => {
   console.log = () => {};
 
   try {
-    const agent = new Agent({ baseURL: mock.url, apiKey: "mock" });
+    const agent = createAgent({ baseURL: mock.url, apiKey: "mock" });
     await agent.chat("read package.json");
 
     assert.equal(mock.requests.length, 2);
@@ -464,7 +551,7 @@ test("Agent 累计每次完整模型响应的 Prompt Cache usage", async () => {
 
 test("Agent 支持注入基线 Prompt 进行 A/B 评测", async () => {
   const [request] = await captureRequests((url) => {
-    return new Agent({
+    return createAgent({
       baseURL: url,
       apiKey: "mock",
       staticPrompt: "baseline prompt",
@@ -484,7 +571,7 @@ test("Agent 不发送环境中继承的 Anthropic Auth Token", async () => {
 
   process.env.ANTHROPIC_AUTH_TOKEN = "inherited-token";
   try {
-    await new Agent({ baseURL: mock.url, apiKey: "project-key" }).chat("hello");
+    await createAgent({ baseURL: mock.url, apiKey: "project-key" }).chat("hello");
 
     assert.equal(mock.requestHeaders[0]["x-api-key"], "project-key");
     assert.equal(mock.requestHeaders[0].authorization, undefined);
@@ -500,7 +587,7 @@ test("Agent 不发送环境中继承的 Anthropic Auth Token", async () => {
 
 test("Agent 只在第一条用户消息中注入项目上下文", async () => {
   const requests = await captureRequests(async (url) => {
-    const agent = new Agent({ baseURL: url, apiKey: "mock" });
+    const agent = createAgent({ baseURL: url, apiKey: "mock" });
     await agent.chat("first message");
     await agent.chat("second message");
   });

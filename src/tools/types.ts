@@ -41,6 +41,10 @@ export type ToolHandler = (
 
 export type Tool = ToolDef & {
   permissionKind: PermissionKind;
+  getPermissionTarget: (
+    input: Record<string, unknown>,
+    context: ToolContext,
+  ) => string;
   validateInput?: ToolValidator;
   isConcurrencySafe?: (input: Record<string, unknown>) => boolean;
   execute: ToolHandler;

@@ -10,6 +10,7 @@ export type PermissionKind = "read" | "edit" | "shell" | "network";
 export type PermissionRequest = {
   toolName: string;
   permissionKind: PermissionKind;
+  permissionTarget: string;
   input: Record<string, unknown>;
   cwd: string;
   signal?: AbortSignal;

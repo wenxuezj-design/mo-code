@@ -5,6 +5,7 @@ import type { Tool, ToolExecutionResult } from "./types.ts";
 export const runShellTool: Tool = {
   name: "run_shell",
   permissionKind: "shell",
+  getPermissionTarget: (input) => String(input.command ?? ""),
   description: "Execute a shell command and return its output. Use this for running tests, installing packages, git operations, etc.",
   input_schema: {
     type: "object",

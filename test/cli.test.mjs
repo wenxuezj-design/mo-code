@@ -272,6 +272,86 @@ test("--dangerously-skip-permissions 直接进入 bypassPermissions", async () =
   assert.match(result.stdout, /权限模式: bypassPermissions/);
 });
 
+test("权限配置设置默认模式，命令行模式仍保持更高优先级", async () => {
+  const configured = await captureCliRequest(
+    [],
+    "/status\n/exit\n",
+    {
+      userSettings: {
+        permissions: { defaultMode: "plan" },
+      },
+    },
+  );
+  assert.equal(configured.status, 0, configured.stderr);
+  assert.match(configured.stdout, /权限模式: plan/);
+
+  const overridden = await captureCliRequest(
+    ["--permission-mode", "acceptEdits"],
+    "/status\n/exit\n",
+    {
+      userSettings: {
+        permissions: { defaultMode: "plan" },
+      },
+    },
+  );
+  assert.equal(overridden.status, 0, overridden.stderr);
+  assert.match(overridden.stdout, /权限模式: acceptEdits/);
+});
+
+test("CLI 加载权限规则并应用到真实工具调用", async () => {
+  const result = await captureCliRequest(
+    ["--print", "read package.json"],
+    "",
+    {
+      userSettings: {
+        permissions: { deny: ["read_file(package.json)"] },
+      },
+      responses: [
+        {
+          content: [{
+            type: "tool_use",
+            id: "toolu_settings_denied_0",
+            name: "read_file",
+            input: { file_path: "package.json" },
+          }],
+          stop_reason: "tool_use",
+        },
+        { content: [] },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 2);
+  const toolResult = result.requests[1].messages.at(-1).content[0];
+  assert.equal(toolResult.is_error, true);
+  assert.match(toolResult.content, /Permission denied: Permission rule/);
+  assert.match(toolResult.content, /read_file\(package\.json\)/);
+  assert.match(toolResult.content, /\.mo-code\/settings\.json/);
+});
+
+test("权限配置错误时 CLI 失败关闭且不调用模型", async () => {
+  for (const options of [
+    { userSettingsRaw: "{invalid-json" },
+    {
+      userSettings: {
+        permissions: { deny: ["missing_tool"] },
+      },
+    },
+  ]) {
+    const result = await captureCliRequest(
+      ["--print", "hello"],
+      "",
+      options,
+    );
+
+    assert.equal(result.status, 1);
+    assert.equal(result.requests.length, 0);
+    assert.match(result.stderr, /^Error: Invalid permission (settings|rule)/);
+    assert.match(result.stderr, /\.mo-code\/settings\.json/);
+  }
+});
+
 test("/status 显示当前进程累计的 Prompt Cache usage", async () => {
   const result = await captureCliRequest(
     [],
@@ -891,6 +971,19 @@ async function captureCliRequest(args, stdin = "", options = {}) {
     writeFileSync(home, "not a directory");
   } else {
     mkdirSync(home);
+  }
+  if (
+    options.userSettings !== undefined
+    || options.userSettingsRaw !== undefined
+  ) {
+    const settingsPath = join(home, ".mo-code", "settings.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      options.userSettingsRaw
+        ?? JSON.stringify(options.userSettings),
+      "utf-8",
+    );
   }
   const sessionDir = join(home, ".mo-code", "sessions");
   if (options.initialSession !== undefined) {

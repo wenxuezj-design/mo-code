@@ -150,3 +150,6 @@ vite.config.ts.timestamp-*
 
 # Generated exports
 exports/
+
+# Local mo-code settings
+.mo-code/settings.local.json

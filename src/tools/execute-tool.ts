@@ -35,6 +35,7 @@ export async function executeTool(
   const authorization = await context.permissionGate.authorize({
     toolName: name,
     permissionKind: tool.permissionKind,
+    permissionTarget: tool.getPermissionTarget(input, context),
     input,
     cwd: context.cwd,
     signal: context.signal,

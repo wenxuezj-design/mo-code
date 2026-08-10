@@ -70,6 +70,42 @@ test("executeTool 把工具权限类别传给 PermissionGate", async () => {
 
   assert.equal(receivedRequest.toolName, "list_files");
   assert.equal(receivedRequest.permissionKind, "read");
+  assert.equal(receivedRequest.permissionTarget, resolve(process.cwd(), "no-match-*"));
+});
+
+test("工具从各自输入生成权限匹配目标", () => {
+  const context = createContext();
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  assert.equal(
+    byName.get("read_file").getPermissionTarget(
+      { file_path: "./src/../package.json" },
+      context,
+    ),
+    resolve(context.cwd, "package.json"),
+  );
+  assert.equal(
+    byName.get("list_files").getPermissionTarget(
+      { path: "src", pattern: "**/*.ts" },
+      context,
+    ),
+    resolve(context.cwd, "src/**/*.ts"),
+  );
+  assert.equal(
+    byName.get("grep_search").getPermissionTarget({}, context),
+    resolve(context.cwd),
+  );
+  assert.equal(
+    byName.get("run_shell").getPermissionTarget({ command: "pnpm test" }, context),
+    "pnpm test",
+  );
+  assert.equal(
+    byName.get("web_fetch").getPermissionTarget(
+      { url: "https://example.com/docs" },
+      context,
+    ),
+    "https://example.com/docs",
+  );
 });
 
 test("executeTool 要求显式提供 PermissionGate", async () => {

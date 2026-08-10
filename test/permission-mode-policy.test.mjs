@@ -68,6 +68,7 @@ function createRequest(permissionKind) {
   return {
     toolName: "example_tool",
     permissionKind,
+    permissionTarget: "example-target",
     input: {},
     cwd: "/project",
   };
