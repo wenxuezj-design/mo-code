@@ -11,7 +11,7 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { Message } from "./agent-loop.ts";
+import type { Message } from "./agent/index.ts";
 
 export type SessionData = {
   version: 1;

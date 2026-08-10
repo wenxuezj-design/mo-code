@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { startMockLLM } from "../mock/mock-llm.mjs";
-import { Agent } from "../src/agent-loop.ts";
+import { Agent } from "../src/agent/index.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
 function createAgent(options = {}) {

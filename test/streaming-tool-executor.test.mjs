@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { startMockLLM } from "../mock/mock-llm.mjs";
-import { Agent, StreamingToolExecutor } from "../src/agent-loop.ts";
+import { Agent, StreamingToolExecutor } from "../src/agent/index.ts";
 
 test("安全工具在 accept 时启动，并按原始顺序返回结果", async () => {
   const execution = createControlledExecution();

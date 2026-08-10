@@ -1,5 +1,3 @@
-import { pathToFileURL } from "node:url";
-
 import Anthropic from "@anthropic-ai/sdk";
 
 import {
@@ -10,20 +8,16 @@ import {
   type LoadedPermissionSettings,
   type PermissionMode,
   type PermissionPrompter,
-} from "./permissions/index.ts";
+} from "../permissions/index.ts";
 import {
   SYSTEM_PROMPT_TEMPLATE,
   buildSystemPrompt,
   buildUserContextReminder,
   type SystemPromptBlock,
-} from "./system-prompt.ts";
-import {
-  executeTool,
-  isToolConcurrencySafe,
-  toolDefinitions,
-  type ToolContext,
-  type ToolExecutionResult,
-} from "./tools/index.ts";
+} from "../system-prompt.ts";
+import { toolDefinitions } from "../tools/index.ts";
+import { SmoothTextWriter } from "./smooth-text-writer.ts";
+import { StreamingToolExecutor } from "./streaming-tool-executor.ts";
 
 // 1. Type definitions
 export type Message = Anthropic.MessageParam;
@@ -53,7 +47,6 @@ export type PromptCacheUsage = {
 
 // 2. Model and tool definitions
 const MODEL = "claude-sonnet-4-6";
-const SMOOTH_OUTPUT_INTERVAL_MS = 10;
 const MAX_OUTPUT_TOKENS = 64_000;
 const THINKING_BUDGET_TOKENS = 32_000;
 
@@ -68,211 +61,6 @@ type AgentOptions = {
   permissionPrompter?: PermissionPrompter;
   permissionSettings?: LoadedPermissionSettings;
 };
-
-class SmoothTextWriter {
-  private characters: string[] = [];
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private ended = false;
-  private resolveDrained!: () => void;
-  private drained: Promise<void>;
-  hasText = false;
-
-  constructor() {
-    this.drained = new Promise((resolve) => {
-      this.resolveDrained = resolve;
-    });
-  }
-
-  write(text: string): void {
-    const characters = Array.from(text);
-    if (characters.length === 0) return;
-
-    this.hasText = true;
-    this.characters.push(...characters);
-    this.pump();
-  }
-
-  finish(): Promise<void> {
-    this.ended = true;
-    this.resolveIfDrained();
-    return this.drained;
-  }
-
-  abort(): void {
-    this.ended = true;
-    this.characters = [];
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
-    this.resolveDrained();
-  }
-
-  private pump(): void {
-    if (this.timer || this.characters.length === 0) return;
-
-    process.stdout.write(this.characters.shift()!);
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      this.pump();
-      this.resolveIfDrained();
-    }, SMOOTH_OUTPUT_INTERVAL_MS);
-  }
-
-  /** 平滑文字输出是否彻底结束 */
-  private resolveIfDrained(): void {
-    // 已经调用结束方法，不会加入新文字
-    // 且 没有正在执行的输出定时器
-    // 且 待输出的字符串缓冲区已经清空
-    if (this.ended && !this.timer && this.characters.length === 0) {
-      this.resolveDrained();
-    }
-  }
-}
-
-type ToolExecutor = (
-  name: string,
-  input: Record<string, unknown>,
-  context: ToolContext,
-) => Promise<ToolExecutionResult>;
-
-type ToolExecutionOutcome =
-  | { status: "completed"; output: ToolExecutionResult }
-  | { status: "interrupted" };
-
-export class StreamingToolExecutor {
-  private toolUses: Anthropic.ToolUseBlock[] = [];
-  private earlyExecutions = new Map<string, Promise<ToolExecutionOutcome>>();
-  private reachedExecutionBarrier = false;
-  private context: ToolContext;
-  private execute: ToolExecutor;
-
-  constructor(
-    context: ToolContext,
-    execute: ToolExecutor = executeTool,
-  ) {
-    this.context = context;
-    this.execute = execute;
-  }
-
-  accept(block: Anthropic.ToolUseBlock): void {
-    this.toolUses.push(block);
-
-    if (!this.isConcurrencySafe(block)) {
-      this.reachedExecutionBarrier = true;
-      return;
-    }
-
-    if (!this.reachedExecutionBarrier) {
-      this.earlyExecutions.set(block.id, this.executeBlock(block));
-    }
-  }
-
-  async finish(): Promise<Anthropic.ToolResultBlockParam[]> {
-    const results: Anthropic.ToolResultBlockParam[] = [];
-    let index = 0;
-
-    while (index < this.toolUses.length) {
-      const toolUse = this.toolUses[index];
-      const earlyExecution = this.earlyExecutions.get(toolUse.id);
-
-      if (earlyExecution) {
-        this.logToolUse(toolUse);
-        results.push(this.toToolResult(toolUse, await earlyExecution));
-        index++;
-        continue;
-      }
-
-      if (this.context.signal?.aborted) {
-        results.push(this.toToolResult(toolUse, { status: "interrupted" }));
-        index++;
-        continue;
-      }
-
-      if (!this.isConcurrencySafe(toolUse)) {
-        this.logToolUse(toolUse);
-        results.push(this.toToolResult(toolUse, await this.executeBlock(toolUse)));
-        index++;
-        continue;
-      }
-
-      const batch: Anthropic.ToolUseBlock[] = [];
-      while (
-        index < this.toolUses.length
-        && this.isConcurrencySafe(this.toolUses[index])
-        && !this.earlyExecutions.has(this.toolUses[index].id)
-      ) {
-        batch.push(this.toolUses[index]);
-        index++;
-      }
-
-      for (const toolUse of batch) this.logToolUse(toolUse);
-      const outputs = await Promise.all(batch.map((toolUse) => this.executeBlock(toolUse)));
-      results.push(
-        ...batch.map((toolUse, batchIndex) => this.toToolResult(toolUse, outputs[batchIndex])),
-      );
-    }
-
-    return results;
-  }
-
-  async settle(): Promise<void> {
-    await Promise.all(this.earlyExecutions.values());
-  }
-
-  private isConcurrencySafe(block: Anthropic.ToolUseBlock): boolean {
-    return isToolConcurrencySafe(
-      block.name,
-      block.input as Record<string, unknown>,
-    );
-  }
-
-  private async executeBlock(block: Anthropic.ToolUseBlock): Promise<ToolExecutionOutcome> {
-    if (this.context.signal?.aborted) {
-      return { status: "interrupted" };
-    }
-
-    try {
-      const output = await this.execute(
-        block.name,
-        block.input as Record<string, unknown>,
-        this.context,
-      );
-      return { status: "completed", output };
-    } catch (error) {
-      if (this.context.signal?.aborted) {
-        return { status: "interrupted" };
-      }
-      throw error;
-    }
-  }
-
-  private logToolUse(block: Anthropic.ToolUseBlock): void {
-    console.log(`  -> ${block.name}(${JSON.stringify(block.input)})`);
-  }
-
-  private toToolResult(
-    block: Anthropic.ToolUseBlock,
-    outcome: ToolExecutionOutcome,
-  ): Anthropic.ToolResultBlockParam {
-    if (outcome.status === "interrupted") {
-      return {
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: "Interrupted by user.",
-        is_error: true,
-      };
-    }
-
-    const result: Anthropic.ToolResultBlockParam = {
-      type: "tool_result",
-      tool_use_id: block.id,
-      content: outcome.output.content,
-    };
-    if (outcome.output.isError) result.is_error = true;
-    return result;
-  }
-}
 
 // 3. Agent Loop
 export class Agent {
@@ -504,14 +292,4 @@ export class Agent {
       }
     }
   }
-}
-
-// 4. CLI entry
-async function main() {
-  const prompt = process.argv.slice(2).join(" ") || "Read the file greeting.txt and tell me what it says.";
-  await new Agent().chat(prompt);
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
 }

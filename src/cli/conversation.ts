@@ -1,6 +1,6 @@
 import { createInterface, type Interface } from "node:readline";
 
-import type { Agent, ChatResult } from "../agent-loop.ts";
+import type { Agent, ChatResult } from "../agent/index.ts";
 import type { PermissionMode } from "../permissions/index.ts";
 import { appendSessionTurn, type SessionData } from "../session.ts";
 
