@@ -1,8 +1,10 @@
 {
   "name": "mo-code",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "cli": "node --env-file-if-exists=.env --no-warnings --experimental-strip-types src/cli/main.ts",
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --noEmit",
     "story:lettering": "node docs/story/tools/lettering/server.mjs",
@@ -12,9 +14,11 @@
     "story:assets:push": "node docs/story/tools/lettering/assets-cli.mjs push"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0"
+    "@types/node": "^26.1.0",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.113.0",
     "fflate": "^0.8.3",
     "glob": "^13.0.6",
     "pdf-lib": "^1.17.1",

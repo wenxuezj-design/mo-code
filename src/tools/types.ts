@@ -10,6 +10,7 @@ export type ToolDef = {
 
 export type ToolContext = {
   readFileState: Map<string, number>;
+  signal?: AbortSignal;
 };
 
 export type ValidationResult =
@@ -28,5 +29,6 @@ export type ToolHandler = (
 
 export type Tool = ToolDef & {
   validateInput?: ToolValidator;
+  isConcurrencySafe?: (input: Record<string, unknown>) => boolean;
   execute: ToolHandler;
 };

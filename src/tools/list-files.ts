@@ -19,6 +19,7 @@ export const listFilesTool: Tool = {
     },
     required: ["pattern"],
   },
+  isConcurrencySafe: () => true,
   execute(input) {
     return listFiles({
       pattern: String(input.pattern ?? ""),

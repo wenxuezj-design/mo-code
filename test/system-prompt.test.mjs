@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
 const documentPath = fileURLToPath(
-  new URL("../docs/notes/0.3 System Prompt工程.md", import.meta.url),
+  new URL("../docs/notes/0.3 System Prompt工程实现笔记.md", import.meta.url),
 );
 
 test("SYSTEM_PROMPT_TEMPLATE 与文档中的静态模板保持一致", () => {
