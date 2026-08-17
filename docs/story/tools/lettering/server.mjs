@@ -316,6 +316,7 @@ async function handleStatic(request, response, pathname) {
     ["/lib/canvas-export.mjs", ["lib/canvas-export.mjs", "text/javascript; charset=utf-8"]],
     ["/lib/page-model.mjs", ["lib/page-model.mjs", "text/javascript; charset=utf-8"]],
     ["/lib/save-queue.mjs", ["lib/save-queue.mjs", "text/javascript; charset=utf-8"]],
+    ["/lib/editor-route.mjs", ["lib/editor-route.mjs", "text/javascript; charset=utf-8"]],
   ]);
   const entry = files.get(pathname);
   if (!entry) return false;

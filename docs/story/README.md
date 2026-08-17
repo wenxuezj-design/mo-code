@@ -49,6 +49,18 @@ rclone version
 
 Chrome 装在系统常见位置时会被自动发现。非标准安装位置稍后用 `STORY_CHROME_PATH` 指定。
 
+把 rclone 的绝对路径记录到当前 shell，避免系统从不可信的 `PATH` 目录启动同名程序：
+
+```bash
+export STORY_RCLONE_BIN="$(command -v rclone)"
+```
+
+PowerShell 当前会话使用：
+
+```powershell
+$env:STORY_RCLONE_BIN = (Get-Command rclone).Source
+```
+
 ### 2. 安装仓库依赖
 
 克隆团队仓库后进入仓库根目录，然后运行：
@@ -232,7 +244,8 @@ git check-ignore -v --no-index docs/story/path/to/candidate.webp
 
 - `STORY_RCLONE_REMOTE is missing`：重新执行 `export STORY_RCLONE_REMOTE='mo-code-story:'`。
 - `STORY_RCLONE_REMOTE must be a remote name...`：变量只能是类似 `mo-code-story:` 的 remote 根名称；检查结尾冒号，并移除子目录、空格或选项。
-- `rclone is not installed`：按上面的安装步骤安装并确认 `rclone version`。
+- `STORY_RCLONE_BIN must be an absolute path...`：重新执行 `export STORY_RCLONE_BIN="$(command -v rclone)"`，不要只填写 `rclone`。
+- `rclone is not installed`：按上面的安装步骤安装，确认 `rclone version`，再设置 `STORY_RCLONE_BIN`。
 - Drive 授权过期：运行 `rclone config reconnect mo-code-story:`，再用 `rclone lsf mo-code-story:` 验证。
 - remote 根错误或文件找不到：`rclone lsf mo-code-story:` 必须直接显示 `chapters/`；否则重新配置 `root_folder_id`。
 - SHA、bytes 或尺寸不匹配：远端对象与 `assets.json` 不一致。保留旧 cache，检查 `remotePath` 和版本号；不要手改哈希来迁就错误文件。

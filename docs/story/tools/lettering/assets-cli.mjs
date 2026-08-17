@@ -64,7 +64,7 @@ function requireRemote(env) {
 async function selectedPages({ projectRoot, chapter, page }) {
   if (page !== undefined) return [page];
   const manifest = await loadAssetManifest({ projectRoot, chapter });
-  return Object.keys(manifest.pages).sort();
+  return Object.keys(manifest.pages).sort((left, right) => Number(left) - Number(right));
 }
 
 function writeSetupError(stderr, error) {
@@ -122,7 +122,7 @@ export async function main({
         chapter: options.chapter,
       });
       const pages = options.page === undefined
-        ? Object.keys(manifest.pages).sort()
+        ? Object.keys(manifest.pages).sort((left, right) => Number(left) - Number(right))
         : [options.page];
       for (const page of pages) {
         const asset = resolvePageAsset({

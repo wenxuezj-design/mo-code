@@ -3,12 +3,11 @@ import { fitText, layoutText } from "/lib/text-fit.mjs";
 import { drawPage, renderPageBlob } from "/lib/canvas-export.mjs";
 import { isPortraitItem, isTextItem } from "/lib/page-model.mjs";
 import { createSaveQueue } from "/lib/save-queue.mjs";
+import { buildPageApiRoot, parseEditorRoute } from "/lib/editor-route.mjs";
 
 const HANDLE_NAMES = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
-const query = new URLSearchParams(location.search);
-const chapter = query.get("chapter") || "01-agent-loop";
-const page = query.get("page") || "01";
-const apiRoot = `/api/pages/${chapter}/${page}`;
+const { chapter, page } = parseEditorRoute(location.search);
+const apiRoot = buildPageApiRoot({ chapter, page });
 const refs = Object.fromEntries([
   "saveStatus", "checkOverflow", "exportPng", "exportWebp", "pageThumb", "pageThumbCanvas", "pageTitle", "pageMeta",
   "previousPage", "nextPage", "itemCount", "autoFit", "toggleGuides", "zoomLabel", "stageWrap", "stageToolbar", "pageFrame", "pageCanvas", "baseImage", "letteringPreview",

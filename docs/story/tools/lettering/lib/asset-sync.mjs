@@ -1,5 +1,14 @@
 import { spawn } from "node:child_process";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import {
+  access,
+  mkdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -14,6 +23,86 @@ const VERSION_PATTERN = /^v[1-9]\d*$/;
 const PAGE_PATTERN = /^\d{2}$/;
 const IMAGE_EXTENSION_PATTERN = /^\.(png|webp)$/i;
 const RCLONE_REMOTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*:$/;
+const GROUP_OR_WORLD_WRITABLE = 0o022;
+
+function rcloneExecutableError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+async function validateRcloneExecutable(filePath) {
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath)) {
+    throw rcloneExecutableError(
+      "STORY_RCLONE_BIN_INVALID",
+      "STORY_RCLONE_BIN must be an absolute path to the rclone executable",
+    );
+  }
+
+  const resolvedPath = await realpath(filePath);
+  const [fileInfo, directoryInfo] = await Promise.all([
+    stat(resolvedPath),
+    stat(path.dirname(resolvedPath)),
+  ]);
+  if (!fileInfo.isFile()) {
+    throw rcloneExecutableError(
+      "STORY_RCLONE_BIN_INVALID",
+      `rclone executable is not a file: ${resolvedPath}`,
+    );
+  }
+  await access(resolvedPath, fsConstants.X_OK);
+
+  if (process.platform !== "win32") {
+    const currentUid = typeof process.getuid === "function" ? process.getuid() : null;
+    for (const [info, label] of [
+      [fileInfo, "rclone executable"],
+      [directoryInfo, "rclone executable directory"],
+    ]) {
+      if ((info.mode & GROUP_OR_WORLD_WRITABLE) !== 0) {
+        throw rcloneExecutableError(
+          "STORY_RCLONE_BIN_UNSAFE",
+          `${label} must not be writable by group or other users`,
+        );
+      }
+      if (currentUid !== null && info.uid !== 0 && info.uid !== currentUid) {
+        throw rcloneExecutableError(
+          "STORY_RCLONE_BIN_UNSAFE",
+          `${label} must be owned by the current user or root`,
+        );
+      }
+    }
+  }
+
+  return resolvedPath;
+}
+
+function missingRcloneError() {
+  return rcloneExecutableError(
+    "ENOENT",
+    "rclone executable was not found in STORY_RCLONE_BIN or a trusted PATH directory",
+  );
+}
+
+export async function resolveRcloneExecutable({ env = process.env } = {}) {
+  if (env.STORY_RCLONE_BIN !== undefined) {
+    return validateRcloneExecutable(env.STORY_RCLONE_BIN);
+  }
+
+  if (typeof env.PATH !== "string" || env.PATH.length === 0) {
+    throw missingRcloneError();
+  }
+  const executableName = process.platform === "win32" ? "rclone.exe" : "rclone";
+  for (const directory of env.PATH.split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) continue;
+    try {
+      return await validateRcloneExecutable(path.join(directory, executableName));
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR", "EACCES"].includes(error?.code)) continue;
+      throw error;
+    }
+  }
+  throw missingRcloneError();
+}
 
 export function assertRcloneRemote(remote) {
   if (typeof remote !== "string" || !RCLONE_REMOTE_PATTERN.test(remote)) {
@@ -26,9 +115,10 @@ export function assertRcloneRemote(remote) {
   return remote;
 }
 
-export function runRclone(args) {
+export async function runRclone(args) {
+  const executable = await resolveRcloneExecutable();
   return new Promise((resolve, reject) => {
-    const child = spawn("rclone", args, { shell: false, stdio: "inherit" });
+    const child = spawn(executable, args, { shell: false, stdio: "inherit" });
     child.once("error", reject);
     child.once("close", (code, signal) => {
       if (code === 0) {
