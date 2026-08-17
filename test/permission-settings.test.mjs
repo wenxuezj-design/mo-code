@@ -1,6 +1,8 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -10,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  addLocalPermissionAllowRule,
   loadPermissionSettings,
 } from "../src/permissions/permission-settings.ts";
 
@@ -244,6 +247,80 @@ test("忽略权限配置之外的未知字段", () => {
   });
 });
 
+test("持久 allow 规则写入最近的设置根，并保留其他字段且自动去重", () => {
+  const root = createTemporaryDirectory();
+  const gitRoot = join(root, "workspace");
+  const projectRoot = join(gitRoot, "packages", "demo");
+  const cwd = join(projectRoot, "src");
+  const sharedPath = join(projectRoot, ".mo-code", "settings.json");
+  const localPath = join(projectRoot, ".mo-code", "settings.local.json");
+  mkdirSync(join(gitRoot, ".git"), { recursive: true });
+  writeJson(sharedPath, { permissions: { deny: ["run_shell(rm *)"] } });
+  writeJson(localPath, {
+    model: "example-model",
+    permissions: {
+      allow: ["read_file"],
+      ask: ["run_shell(git push*)"],
+    },
+  });
+
+  addLocalPermissionAllowRule({ cwd, rule: "run_shell(pnpm test)" });
+  addLocalPermissionAllowRule({ cwd, rule: "run_shell(pnpm test)" });
+
+  assert.deepEqual(readJson(localPath), {
+    model: "example-model",
+    permissions: {
+      allow: ["read_file", "run_shell(pnpm test)"],
+      ask: ["run_shell(git push*)"],
+    },
+  });
+  assert.equal(existsSync(join(gitRoot, ".mo-code", "settings.local.json")), false);
+});
+
+test("没有现有设置根时优先写入 Git 根目录", () => {
+  const root = createTemporaryDirectory();
+  const gitRoot = join(root, "workspace");
+  const cwd = join(gitRoot, "packages", "demo");
+  const localPath = join(gitRoot, ".mo-code", "settings.local.json");
+  mkdirSync(join(gitRoot, ".git"), { recursive: true });
+
+  addLocalPermissionAllowRule({
+    cwd,
+    rule: "web_fetch(https://example.com/*)",
+  });
+
+  assert.deepEqual(readJson(localPath), {
+    permissions: { allow: ["web_fetch(https://example.com/*)"] },
+  });
+});
+
+test("没有设置根和 Git 根时回退到 cwd", () => {
+  const root = createTemporaryDirectory();
+  const cwd = join(root, "standalone");
+  const localPath = join(cwd, ".mo-code", "settings.local.json");
+
+  addLocalPermissionAllowRule({ cwd, rule: "run_shell(pnpm test)" });
+
+  assert.deepEqual(readJson(localPath), {
+    permissions: { allow: ["run_shell(pnpm test)"] },
+  });
+});
+
+test("持久规则写入不会覆盖无效的本地配置", () => {
+  const root = createTemporaryDirectory();
+  const cwd = join(root, "project");
+  const localPath = join(cwd, ".mo-code", "settings.local.json");
+  writeRaw(localPath, "{invalid-json");
+
+  assert.throws(
+    () => addLocalPermissionAllowRule({ cwd, rule: "run_shell(pnpm test)" }),
+    (error) => error instanceof Error
+      && error.message.includes(localPath)
+      && error.message.includes("cannot update file"),
+  );
+  assert.equal(readFileSync(localPath, "utf-8"), "{invalid-json");
+});
+
 function createTemporaryDirectory() {
   const directory = mkdtempSync(join(tmpdir(), "mo-code-permission-settings-"));
   temporaryDirectories.push(directory);
@@ -276,6 +353,10 @@ function createSourceFixture(sourceScope) {
 
 function writeJson(path, value) {
   writeRaw(path, JSON.stringify(value));
+}
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf-8"));
 }
 
 function writeRaw(path, contents) {

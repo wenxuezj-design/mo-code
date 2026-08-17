@@ -1,4 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -26,6 +31,11 @@ export type LoadedPermissionSettings = {
 type LoadPermissionSettingsOptions = {
   cwd: string;
   homeDir?: string;
+};
+
+type AddLocalPermissionAllowRuleOptions = {
+  cwd: string;
+  rule: string;
 };
 
 const PERMISSION_MODES = new Set<PermissionMode>([
@@ -77,6 +87,31 @@ export function loadPermissionSettings(
   return loaded;
 }
 
+/**
+ * 把确认界面生成的规则写入项目本地配置。
+ * 优先复用最近的设置根；没有设置根时使用 Git 根目录，最后回退到 cwd。
+ */
+export function addLocalPermissionAllowRule(
+  options: AddLocalPermissionAllowRuleOptions,
+): void {
+  const cwd = resolve(options.cwd);
+  const settingsRoot = findExistingSettingsDirectory(cwd)
+    ?? findGitRoot(cwd)
+    ?? cwd;
+  const settingsPath = join(settingsRoot, ".mo-code", "settings.local.json");
+  const settings = readWritableSettings(settingsPath);
+  const permissions = getWritablePermissions(settings, settingsPath);
+  const allow = getWritableAllowRules(permissions, settingsPath);
+
+  if (allow.includes(options.rule)) return;
+  allow.push(options.rule);
+  permissions.allow = allow;
+  settings.permissions = permissions;
+
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
+}
+
 function findProjectSettingsDirectory(
   cwd: string,
   homeDir: string,
@@ -97,6 +132,73 @@ function findProjectSettingsDirectory(
     current = parent;
   }
   return undefined;
+}
+
+function findExistingSettingsDirectory(cwd: string): string | undefined {
+  const userHome = resolve(homedir());
+  return findAncestor(cwd, (directory) => {
+    // ~/.mo-code/settings.json 是用户级配置，不能作为项目本地授权的写入位置。
+    if (directory === userHome) return false;
+    const settingsDir = join(directory, ".mo-code");
+    return existsSync(join(settingsDir, "settings.json"))
+      || existsSync(join(settingsDir, "settings.local.json"));
+  });
+}
+
+function findGitRoot(cwd: string): string | undefined {
+  return findAncestor(cwd, (directory) => existsSync(join(directory, ".git")));
+}
+
+function findAncestor(
+  cwd: string,
+  matches: (directory: string) => boolean,
+): string | undefined {
+  let current = resolve(cwd);
+  while (true) {
+    if (matches(current)) return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+function readWritableSettings(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+  } catch (error) {
+    throw invalidSettings(path, `cannot update file: ${getErrorMessage(error)}`);
+  }
+  if (!isRecord(value)) {
+    throw invalidSettings(path, "settings must be an object");
+  }
+  return value;
+}
+
+function getWritablePermissions(
+  settings: Record<string, unknown>,
+  path: string,
+): Record<string, unknown> {
+  const permissions = settings.permissions;
+  if (permissions === undefined) return {};
+  if (!isRecord(permissions)) {
+    throw invalidSettings(path, "permissions must be an object");
+  }
+  return permissions;
+}
+
+function getWritableAllowRules(
+  permissions: Record<string, unknown>,
+  path: string,
+): string[] {
+  const allow = permissions.allow;
+  if (allow === undefined) return [];
+  if (!Array.isArray(allow) || allow.some((rule) => typeof rule !== "string")) {
+    throw invalidSettings(path, "permissions.allow must be a string array");
+  }
+  return [...allow];
 }
 
 function loadSettingsFile(

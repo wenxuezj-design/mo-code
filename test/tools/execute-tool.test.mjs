@@ -128,14 +128,93 @@ test("工具从各自输入生成权限匹配目标", () => {
       permissionKind: "shell",
       permissionTarget: "pnpm test",
       shellSemantics: "unknown",
+      grant: {
+        scope: "persistent",
+        key: "run_shell:pnpm test",
+        rule: "run_shell(pnpm test)",
+        label: "在当前项目中不再询问此命令",
+      },
     },
   );
-  assert.equal(
+  assert.deepEqual(
     byName.get("web_fetch").getPermissionDescriptor(
       { url: "https://example.com/docs" },
       context,
-    ).permissionTarget,
-    "https://example.com/docs",
+    ),
+    {
+      permissionKind: "network",
+      permissionTarget: "https://example.com/docs",
+      grant: {
+        scope: "persistent",
+        key: "web_fetch:https://example.com",
+        rule: "web_fetch(https://example.com/*)",
+        label: "不再询问 https://example.com",
+      },
+    },
+  );
+});
+
+test("编辑工具共享会话授权，读取工具不生成授权建议", () => {
+  const context = createContext();
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  for (const toolName of ["write_file", "edit_file"]) {
+    assert.deepEqual(
+      byName.get(toolName).getPermissionDescriptor(
+        { file_path: "src/app.ts" },
+        context,
+      ).grant,
+      {
+        scope: "session",
+        key: "edit:*",
+        label: "当前会话不再询问文件编辑",
+      },
+    );
+  }
+  for (const toolName of ["read_file", "list_files", "grep_search"]) {
+    assert.equal(
+      byName.get(toolName).getPermissionDescriptor({}, context).grant,
+      undefined,
+    );
+  }
+});
+
+test("Shell 自动规则转义星号和反斜杠，WebFetch 按规范化 origin 授权", () => {
+  const context = createContext();
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  const command = String.raw`printf C:\temp\*.log`;
+
+  assert.deepEqual(
+    byName.get("run_shell").getPermissionDescriptor({ command }, context).grant,
+    {
+      scope: "persistent",
+      key: `run_shell:${command}`,
+      rule: String.raw`run_shell(printf C:\\temp\\\*.log)`,
+      label: "在当前项目中不再询问此命令",
+    },
+  );
+  assert.deepEqual(
+    byName.get("web_fetch").getPermissionDescriptor(
+      { url: "HTTPS://EXAMPLE.COM:443" },
+      context,
+    ),
+    {
+      permissionKind: "network",
+      permissionTarget: "https://example.com/",
+      grant: {
+        scope: "persistent",
+        key: "web_fetch:https://example.com",
+        rule: "web_fetch(https://example.com/*)",
+        label: "不再询问 https://example.com",
+      },
+    },
+  );
+  assert.equal(
+    byName.get("run_shell").getPermissionDescriptor(
+      { command: "   " },
+      context,
+    ).grant,
+    undefined,
   );
 });
 

@@ -47,6 +47,25 @@ test("specifier 中的正则字符按普通文本匹配", () => {
   );
 });
 
+test("规则支持转义星号和反斜杠，以精确匹配自动生成的 Shell 命令", () => {
+  const policy = createPolicy([
+    rule("allow", String.raw`run_shell(printf C:\\temp\\\*.log)`),
+  ]);
+
+  assert.equal(
+    policy.evaluate(
+      request("run_shell", "shell", String.raw`printf C:\temp\*.log`),
+    ).behavior,
+    "allow",
+  );
+  assert.equal(
+    policy.evaluate(
+      request("run_shell", "shell", String.raw`printf C:\temp\app.log`),
+    ).behavior,
+    "ask",
+  );
+});
+
 test("通配符可以匹配包含换行的目标", () => {
   const policy = createPolicy([
     rule("allow", "run_shell(echo * done)"),
@@ -159,6 +178,7 @@ test("ask 优先于 allow，并在 dontAsk 下转为带来源的 deny", () => {
 
   const askDecision = policy.evaluate(toolRequest);
   assert.equal(askDecision.behavior, "ask");
+  assert.equal(askDecision.rememberable, false);
   assert.match(askDecision.reason, /run_shell\(pnpm test\)/);
   assert.match(askDecision.reason, /\/user\/settings\.json/);
 

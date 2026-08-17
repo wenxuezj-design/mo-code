@@ -1,8 +1,7 @@
-import { createInterface, type Interface } from "node:readline";
-
 import type { Agent, ChatResult } from "../agent/index.ts";
 import type { PermissionMode } from "../permissions/index.ts";
 import { appendSessionTurn, type SessionData } from "../session.ts";
+import type { TerminalInput } from "./terminal-input.ts";
 
 const REPL_HELP_TEXT = `REPL 内置命令:
   /help             显示这份帮助
@@ -41,6 +40,7 @@ function saveAgentTurn(agent: Agent, session: SessionData): void {
   const turnMessages = messages.slice(session.messages.length);
   session.messages = messages;
   session.model = agent.getModel();
+  session.permissionGrants = agent.getPermissionSessionGrants();
 
   try {
     appendSessionTurn(session, turnMessages);
@@ -85,12 +85,11 @@ export async function runPrintTurn(
 export async function runRepl(
   agent: Agent,
   session: SessionData,
+  terminal: TerminalInput,
   initialPrompt?: string,
 ): Promise<void> {
-  let rl: Interface | undefined;
   let sigintCount = 0;
   let exitRequested = false;
-  let selectingPermissionMode = false;
 
   const handleSigint = () => {
     if (agent.isProcessing()) {
@@ -103,15 +102,16 @@ export async function runRepl(
     if (sigintCount >= 2) {
       exitRequested = true;
       process.stderr.write("\nBye!\n");
-      rl?.close();
+      terminal.close();
       return;
     }
 
     process.stderr.write("\nPress Ctrl+C again to exit.\n");
-    rl?.prompt();
+    terminal.redisplay();
   };
 
   process.on("SIGINT", handleSigint);
+  const removeTerminalInterruptListener = terminal.onInterrupt(handleSigint);
   try {
     if (initialPrompt) {
       const result = await runTurn(agent, session, initialPrompt);
@@ -119,44 +119,11 @@ export async function runRepl(
     }
     if (exitRequested) return;
 
-    rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.setPrompt("> ");
-    rl.prompt();
-
-    for await (const line of rl) {
+    while (!exitRequested) {
+      const line = await terminal.readLine("> ");
+      if (line === undefined) break;
       sigintCount = 0;
       const input = line.trim();
-      if (selectingPermissionMode) {
-        if (input.toLowerCase() === "q") {
-          selectingPermissionMode = false;
-          process.stdout.write("已取消\n");
-          rl.setPrompt("> ");
-        } else if (/^[1-5]$/.test(input)) {
-          const mode = PERMISSION_MODE_OPTIONS[Number(input) - 1];
-          if (
-            mode === "bypassPermissions"
-            && !agent.isBypassPermissionsAvailable()
-          ) {
-            process.stdout.write(
-              "bypassPermissions 未开放，请使用 "
-              + "--allow-dangerously-skip-permissions 重新启动\n",
-            );
-            rl.setPrompt(PERMISSION_MODE_PROMPT);
-          } else {
-            agent.setPermissionMode(mode);
-            selectingPermissionMode = false;
-            process.stdout.write(`权限模式: ${mode}\n`);
-            rl.setPrompt("> ");
-          }
-        } else {
-          process.stdout.write("请输入 1 到 5 之间的编号，或输入 q 取消\n");
-          rl.setPrompt(PERMISSION_MODE_PROMPT);
-        }
-
-        if (!exitRequested) rl.prompt();
-        continue;
-      }
-
       if (input === "/exit" || input === "/quit") break;
       if (input === "/help") {
         process.stdout.write(REPL_HELP_TEXT);
@@ -176,17 +143,51 @@ export async function runRepl(
         agent.setThinkingEnabled(enabled);
         process.stdout.write(`Thinking: ${enabled ? "开启" : "关闭"}\n`);
       } else if (input === "/permission-mode") {
-        selectingPermissionMode = true;
         showPermissionModeMenu(agent);
-        rl.setPrompt(PERMISSION_MODE_PROMPT);
+        await selectPermissionMode(agent, terminal);
       } else if (input) {
         const result = await runTurn(agent, session, input);
         if (result === "interrupted") reportInterrupted();
       }
-      if (!exitRequested) rl.prompt();
     }
   } finally {
     process.off("SIGINT", handleSigint);
-    rl?.close();
+    removeTerminalInterruptListener();
+  }
+}
+
+async function selectPermissionMode(
+  agent: Agent,
+  terminal: TerminalInput,
+): Promise<void> {
+  while (true) {
+    const line = await terminal.readLine(PERMISSION_MODE_PROMPT);
+    if (line === undefined) return;
+
+    const input = line.trim();
+    if (input.toLowerCase() === "q") {
+      process.stdout.write("已取消\n");
+      return;
+    }
+    if (!/^[1-5]$/.test(input)) {
+      process.stdout.write("请输入 1 到 5 之间的编号，或输入 q 取消\n");
+      continue;
+    }
+
+    const mode = PERMISSION_MODE_OPTIONS[Number(input) - 1];
+    if (
+      mode === "bypassPermissions"
+      && !agent.isBypassPermissionsAvailable()
+    ) {
+      process.stdout.write(
+        "bypassPermissions 未开放，请使用 "
+        + "--allow-dangerously-skip-permissions 重新启动\n",
+      );
+      continue;
+    }
+
+    agent.setPermissionMode(mode);
+    process.stdout.write(`权限模式: ${mode}\n`);
+    return;
   }
 }

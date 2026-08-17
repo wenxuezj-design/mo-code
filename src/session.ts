@@ -21,6 +21,7 @@ export type SessionData = {
   createdAt: string;
   updatedAt: string;
   messages: Message[];
+  permissionGrants: string[];
 };
 
 export type LatestSessionResult = {
@@ -47,6 +48,7 @@ type TurnRecord = {
   timestamp: string;
   model: string;
   messages: Message[];
+  permissionGrants?: string[];
 };
 
 const SESSION_DIR = join(homedir(), ".mo-code", "sessions");
@@ -63,6 +65,7 @@ export function createSession(cwd: string, model: string): SessionData {
     createdAt: now,
     updatedAt: now,
     messages: [],
+    permissionGrants: [],
   };
 }
 
@@ -73,6 +76,7 @@ export function appendSessionTurn(session: SessionData, messages: Message[]): vo
     timestamp,
     model: session.model,
     messages,
+    permissionGrants: [...session.permissionGrants],
   };
   const filePath = join(SESSION_DIR, `${session.id}.jsonl`);
 
@@ -148,6 +152,7 @@ export function loadSession(id: string): SessionData {
     createdAt: header.createdAt,
     updatedAt: lastTurn?.timestamp ?? header.createdAt,
     messages: turns.flatMap((turn) => turn.messages),
+    permissionGrants: [...(lastTurn?.permissionGrants ?? [])],
   };
 }
 
@@ -227,7 +232,10 @@ function isTurnRecord(value: unknown): value is TurnRecord {
     && typeof value.timestamp === "string"
     && typeof value.model === "string"
     && Array.isArray(value.messages)
-    && value.messages.every(isMessage);
+    && value.messages.every(isMessage)
+    && (value.permissionGrants === undefined
+      || (Array.isArray(value.permissionGrants)
+        && value.permissionGrants.every((grant) => typeof grant === "string")));
 }
 
 function isMessage(value: unknown): value is Message {

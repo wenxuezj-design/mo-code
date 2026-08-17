@@ -9,15 +9,30 @@ export type PermissionKind = "read" | "edit" | "shell" | "network";
 
 export type ShellCommandSemantics = "readOnly" | "mutating" | "unknown";
 
+export type PermissionGrantProposal =
+  | {
+    scope: "session";
+    key: string;
+    label: string;
+  }
+  | {
+    scope: "persistent";
+    key: string;
+    rule: string;
+    label: string;
+  };
+
 export type ToolPermissionDescriptor =
   | {
     permissionKind: Exclude<PermissionKind, "shell">;
     permissionTarget: string;
+    grant?: PermissionGrantProposal;
   }
   | {
     permissionKind: "shell";
     permissionTarget: string;
     shellSemantics: ShellCommandSemantics;
+    grant?: PermissionGrantProposal;
   };
 
 export type PermissionRequest = ToolPermissionDescriptor & {
@@ -29,8 +44,8 @@ export type PermissionRequest = ToolPermissionDescriptor & {
 
 export type PermissionDecision =
   | { behavior: "allow" }
-  | { behavior: "ask"; reason: string }
-  | { behavior: "deny"; reason: string };
+  | { behavior: "ask"; reason: string; rememberable: boolean }
+  | { behavior: "deny"; reason: string; grantable?: boolean };
 
 export type PermissionAuthorization =
   | { allowed: true }
@@ -42,6 +57,14 @@ export type PermissionPolicy = {
   ): PermissionDecision | Promise<PermissionDecision>;
 };
 
+export type PermissionPromptResult =
+  | { action: "allow"; remember: boolean }
+  | { action: "deny"; feedback?: string };
+
 export type PermissionPrompter = {
-  confirm(request: PermissionRequest, reason: string): Promise<boolean>;
+  prompt(
+    request: PermissionRequest,
+    reason: string,
+    options: { canRemember: boolean },
+  ): Promise<PermissionPromptResult>;
 };

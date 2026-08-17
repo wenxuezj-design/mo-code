@@ -50,6 +50,16 @@ test("PermissionModePolicy 按模式和工具类别返回权限结论", () => {
       if (behavior !== "allow") {
         assert.match(decision.reason, new RegExp(`${mode}.*${kind}`));
       }
+      if (behavior === "ask") {
+        assert.equal(decision.rememberable, true, `${mode}/${kind}`);
+      }
+      if (behavior === "deny") {
+        assert.equal(
+          decision.grantable,
+          mode === "dontAsk",
+          `${mode}/${kind}`,
+        );
+      }
     }
   }
 });

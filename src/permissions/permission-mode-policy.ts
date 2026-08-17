@@ -71,11 +71,18 @@ export class PermissionModePolicy implements PermissionPolicy {
     const behavior = MODE_BEHAVIORS[this.mode][request.permissionKind];
     if (behavior === "allow") return { behavior };
 
+    const reason = `Permission mode "${this.mode}" ${
+      behavior === "ask" ? "requires confirmation for" : "blocks"
+    } ${request.permissionKind} tools`;
+    if (behavior === "ask") {
+      return { behavior, reason, rememberable: true };
+    }
+
     return {
       behavior,
-      reason: `Permission mode "${this.mode}" ${
-        behavior === "ask" ? "requires confirmation for" : "blocks"
-      } ${request.permissionKind} tools`,
+      reason,
+      // dontAsk 只关闭交互；已经得到的运行时授权仍然可以执行。
+      grantable: this.mode === "dontAsk",
     };
   }
 }

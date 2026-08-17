@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 import {
+  addLocalPermissionAllowRule,
   PermissionGate,
   PermissionModePolicy,
   PermissionRulePolicy,
@@ -60,6 +61,7 @@ type AgentOptions = {
   allowDangerouslySkipPermissions?: boolean;
   permissionPrompter?: PermissionPrompter;
   permissionSettings?: LoadedPermissionSettings;
+  permissionSessionGrants?: readonly string[];
 };
 
 // 3. Agent Loop
@@ -74,6 +76,7 @@ export class Agent {
   private cwd: string;
   private permissionGate: PermissionGate;
   private permissionModePolicy: PermissionModePolicy;
+  private permissionSessionGrants: Set<string>;
   private bypassPermissionsAvailable: boolean;
   private abortController: AbortController | undefined;
   private promptCacheUsage: PromptCacheUsage = {
@@ -100,6 +103,7 @@ export class Agent {
     this.permissionModePolicy = new PermissionModePolicy(
       options.permissionMode ?? permissionSettings.defaultMode ?? "default",
     );
+    this.permissionSessionGrants = new Set(options.permissionSessionGrants);
     this.permissionGate = new PermissionGate({
       policy: new PermissionRulePolicy(
         permissionSettings.rules,
@@ -107,6 +111,14 @@ export class Agent {
         toolDefinitions.map((tool) => tool.name),
       ),
       prompter: options.permissionPrompter,
+      sessionGrants: this.permissionSessionGrants,
+      persistGrant: (rule) => addLocalPermissionAllowRule({
+        cwd: this.cwd,
+        rule,
+      }),
+      onWarning: (message) => {
+        process.stderr.write(`Warning: ${message}\n`);
+      },
     });
     // 危险模式必须由 CLI 参数或配置显式启用；CLI 可以覆盖本次启动的初始模式，
     // 但配置中启用过 bypassPermissions 时，仍允许用户在当前会话切换回来。
@@ -138,6 +150,10 @@ export class Agent {
 
   getPermissionMode(): PermissionMode {
     return this.permissionModePolicy.getMode();
+  }
+
+  getPermissionSessionGrants(): string[] {
+    return [...this.permissionSessionGrants];
   }
 
   setPermissionMode(mode: PermissionMode): void {
@@ -268,9 +284,11 @@ export class Agent {
         });
         let reply: Anthropic.Message;
         try {
-          reply = await this.callAnthropicStream(signal, (block) => {
-            toolExecutor.accept(block);
-          });
+          reply = await this.permissionGate.deferPromptsWhile(
+            () => this.callAnthropicStream(signal, (block) => {
+              toolExecutor.accept(block);
+            }),
+          );
         } catch (error) {
           if (!signal.aborted) throw error;
           await toolExecutor.settle();

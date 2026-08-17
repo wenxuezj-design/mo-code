@@ -330,6 +330,71 @@ test("CLI 加载权限规则并应用到真实工具调用", async () => {
   assert.match(toolResult.content, /\.mo-code\/settings\.json/);
 });
 
+test("交互模式使用同一个终端输入完成工具权限确认", async () => {
+  const result = await captureCliRequest(
+    [],
+    "run command\n1\n/exit\n",
+    {
+      responses: [
+        {
+          content: [{
+            type: "tool_use",
+            id: "toolu_permission_prompt_0",
+            name: "run_shell",
+            input: { command: "true > /dev/null" },
+          }],
+          stop_reason: "tool_use",
+        },
+        { content: [{ type: "text", text: "done" }] },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 2);
+  assert.match(result.stdout, /权限确认/);
+  assert.match(result.stdout, /工具: run_shell/);
+  assert.match(result.stdout, /目标: true > \/dev\/null/);
+  assert.match(result.stdout, /1\. 仅允许本次/);
+  assert.match(result.stdout, /2\. 在当前项目中不再询问此命令/);
+  assert.match(result.stdout, /3\. 拒绝并告诉 Agent 如何调整/);
+
+  const toolResult = result.requests[1].messages.at(-1).content[0];
+  assert.equal(toolResult.type, "tool_result");
+  assert.equal(toolResult.is_error, undefined);
+});
+
+test("--print 遇到 ask 时不读取输入并把非交互拒绝返回模型", async () => {
+  const result = await captureCliRequest(
+    ["--print", "run command"],
+    "1\n",
+    {
+      responses: [
+        {
+          content: [{
+            type: "tool_use",
+            id: "toolu_print_permission_0",
+            name: "run_shell",
+            input: { command: "true > /dev/null" },
+          }],
+          stop_reason: "tool_use",
+        },
+        { content: [{ type: "text", text: "done" }] },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 2);
+  assert.doesNotMatch(result.stdout, /权限确认/);
+
+  const toolResult = result.requests[1].messages.at(-1).content[0];
+  assert.equal(toolResult.is_error, true);
+  assert.match(toolResult.content, /--print mode is non-interactive/);
+});
+
 test("权限配置错误时 CLI 失败关闭且不调用模型", async () => {
   for (const options of [
     { userSettingsRaw: "{invalid-json" },
@@ -605,6 +670,49 @@ test("--resume 和 -r 恢复指定会话并继续写入原文件", async () => {
       result.sessions[0].records.map(({ type }) => type),
       ["session", "turn", "turn"],
     );
+  }
+});
+
+test("--resume 把会话授权恢复到 Agent 并随新 turn 继续保存", async () => {
+  const outputPath = join(
+    tmpdir(),
+    `mo-code-resumed-grant-${process.pid}-${Date.now()}.txt`,
+  );
+  const initialSession = createStoredSession({ permissionGrants: ["edit:*"] });
+  try {
+    const result = await captureCliRequest(
+      ["--print", "--resume", sessionId, "write file"],
+      "",
+      {
+        initialSession,
+        responses: [
+          {
+            content: [{
+              type: "tool_use",
+              id: "toolu_resumed_grant_0",
+              name: "write_file",
+              input: { file_path: outputPath, content: "saved" },
+            }],
+            stop_reason: "tool_use",
+          },
+          { content: [{ type: "text", text: "done" }] },
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.requests.length, 2);
+    assert.doesNotMatch(result.stdout, /权限确认/);
+    const toolResult = result.requests[1].messages.at(-1).content[0];
+    assert.equal(toolResult.is_error, undefined, toolResult.content);
+    assert.equal(readFileSync(outputPath, "utf-8"), "saved");
+    assert.deepEqual(
+      result.sessions[0].records.at(-1).permissionGrants,
+      ["edit:*"],
+    );
+  } finally {
+    rmSync(outputPath, { force: true });
   }
 });
 
@@ -1105,12 +1213,16 @@ function serializeStoredSession(session) {
   };
   const records = [header];
   if (session.messages.length > 0) {
-    records.push({
+    const turn = {
       type: "turn",
       timestamp: session.updatedAt,
       model: session.model,
       messages: session.messages,
-    });
+    };
+    if (session.permissionGrants !== undefined) {
+      turn.permissionGrants = session.permissionGrants;
+    }
+    records.push(turn);
   }
   return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
 }

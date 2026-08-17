@@ -42,9 +42,13 @@ test("显式 deny 和 ask 规则优先于只读 Shell 语义", () => {
     denyPolicy.evaluate(request("git status", "readOnly")).behavior,
     "deny",
   );
-  assert.equal(
-    askPolicy.evaluate(request("git status", "readOnly")).behavior,
-    "ask",
+  assert.deepEqual(
+    askPolicy.evaluate(request("git status", "readOnly")),
+    {
+      behavior: "ask",
+      reason: 'Permission rule "run_shell(git status)" from /settings.json requires confirmation',
+      rememberable: false,
+    },
   );
   assert.equal(
     planAskPolicy.evaluate(request("git status", "readOnly")).behavior,

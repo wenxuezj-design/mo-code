@@ -4,11 +4,16 @@ import { Agent } from "../agent/index.ts";
 import { HELP_TEXT, parseArgs, type ParsedArgs } from "./args.ts";
 import { runPrintTurn, runRepl } from "./conversation.ts";
 import {
+  nonInteractivePermissionPrompter,
+  TerminalPermissionPrompter,
+} from "./permission-prompter.ts";
+import {
   confirmSessionDeletion,
   reportSkippedSessionFiles,
   selectSession,
   selectSessionToDelete,
 } from "./session-ui.ts";
+import { ReadlineTerminalInput } from "./terminal-input.ts";
 import {
   createSession,
   deleteSession,
@@ -84,6 +89,14 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
 
   let agent: Agent;
   let session: SessionData;
+  let terminal: ReadlineTerminalInput | undefined;
+
+  const createPermissionPrompter = () => {
+    if (parsed.print) return nonInteractivePermissionPrompter;
+
+    terminal = new ReadlineTerminalInput();
+    return new TerminalPermissionPrompter(terminal);
+  };
 
   if (parsed.resume || parsed.continueSession) {
     try {
@@ -130,13 +143,16 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
         thinking: parsed.thinking,
         permissionMode: parsed.permissionMode,
         allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
+        permissionPrompter: createPermissionPrompter(),
+        permissionSessionGrants: session.permissionGrants,
       });
+      agent.restoreMessages(session.messages);
+      session.model = agent.getModel();
     } catch (error) {
+      terminal?.close();
       reportCliError(error);
       return;
     }
-    agent.restoreMessages(session.messages);
-    session.model = agent.getModel();
   } else {
     try {
       agent = new Agent({
@@ -144,18 +160,25 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
         thinking: parsed.thinking,
         permissionMode: parsed.permissionMode,
         allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
+        permissionPrompter: createPermissionPrompter(),
       });
+      session = createSession(process.cwd(), agent.getModel());
     } catch (error) {
+      terminal?.close();
       reportCliError(error);
       return;
     }
-    session = createSession(process.cwd(), agent.getModel());
   }
 
-  if (parsed.print) {
-    if (parsed.prompt) await runPrintTurn(agent, session, parsed.prompt);
-    return;
-  }
+  try {
+    if (parsed.print) {
+      if (parsed.prompt) await runPrintTurn(agent, session, parsed.prompt);
+      return;
+    }
 
-  await runRepl(agent, session, parsed.prompt);
+    if (!terminal) throw new Error("交互模式缺少终端输入器");
+    await runRepl(agent, session, terminal, parsed.prompt);
+  } finally {
+    terminal?.close();
+  }
 }

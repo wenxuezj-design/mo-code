@@ -11,6 +11,17 @@ export const runShellTool: Tool = {
       permissionKind: "shell",
       permissionTarget: command,
       shellSemantics: classifyShellCommand(command),
+      // 空命令无法形成合法的 tool(specifier) 规则，因此只允许单次确认。
+      ...(command.trim().length > 0
+        ? {
+          grant: {
+            scope: "persistent" as const,
+            key: `run_shell:${command}`,
+            rule: `run_shell(${escapePermissionRuleLiteral(command)})`,
+            label: "在当前项目中不再询问此命令",
+          },
+        }
+        : {}),
     };
   },
   description: "Execute a shell command and return its output. Use this for running tests, installing packages, git operations, etc.",
@@ -29,6 +40,11 @@ export const runShellTool: Tool = {
     }, context.signal);
   },
 };
+
+/** 把 Shell 命令中的规则元字符转成普通文本，确保自动授权只精确匹配原命令。 */
+function escapePermissionRuleLiteral(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("*", "\\*");
+}
 
 export function runShell(
   input: { command: string; timeout?: number },

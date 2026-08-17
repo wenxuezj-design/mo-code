@@ -13,6 +13,11 @@ export const writeFileTool: Tool = {
       context.cwd,
       String(input.file_path ?? ""),
     ),
+    grant: {
+      scope: "session",
+      key: "edit:*",
+      label: "当前会话不再询问文件编辑",
+    },
   }),
   description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
   input_schema: {

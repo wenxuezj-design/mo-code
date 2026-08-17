@@ -67,6 +67,8 @@ export class PermissionRulePolicy implements PermissionPolicy {
       return {
         behavior: "ask",
         reason: formatReason(askRule, "requires confirmation"),
+        // 显式 ask 表示每次都必须询问，不能被授权记忆绕过。
+        rememberable: false,
       };
     }
 
@@ -144,16 +146,36 @@ function compileTargetMatcher(
       ? normalizePath(request.permissionTarget)
       : request.permissionTarget;
 
-    if (!expected.includes("*")) return actual === expected;
-
-    const source = expected
-      .split("*")
-      .map(escapeRegExp)
-      .join(".*");
+    const source = compileTargetPattern(expected);
     // s 匹配换行，支持多行 shell 命令
     // u 支持 unicode 字符
     return new RegExp(`^${source}$`, "su").test(actual);
   };
+}
+
+/**
+ * 未转义的 * 是通配符；\* 和 \\ 分别匹配普通星号和反斜杠。
+ * 文件规则会先统一路径分隔符，因此这里的转义主要用于 Shell 精确规则。
+ */
+function compileTargetPattern(pattern: string): string {
+  let source = "";
+  for (let index = 0; index < pattern.length; index++) {
+    const character = pattern[index];
+    if (character === "*") {
+      source += ".*";
+      continue;
+    }
+    if (character === "\\") {
+      const next = pattern[index + 1];
+      if (next === "*" || next === "\\") {
+        source += escapeRegExp(next);
+        index++;
+        continue;
+      }
+    }
+    source += escapeRegExp(character);
+  }
+  return source;
 }
 
 function normalizePath(value: string): string {
