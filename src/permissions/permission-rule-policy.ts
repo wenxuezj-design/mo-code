@@ -39,11 +39,18 @@ export class PermissionRulePolicy implements PermissionPolicy {
       };
     }
 
+    const modeDecision = this.modePolicy.evaluate(request);
     if (
       mode === "plan"
-      && (request.permissionKind === "edit" || request.permissionKind === "shell")
+      && (
+        request.permissionKind === "edit"
+        || (
+          request.permissionKind === "shell"
+          && request.shellSemantics !== "readOnly"
+        )
+      )
     ) {
-      return this.modePolicy.evaluate(request);
+      return modeDecision;
     }
 
     const askRule = this.findMatch("ask", request);
@@ -64,7 +71,7 @@ export class PermissionRulePolicy implements PermissionPolicy {
     }
 
     if (this.findMatch("allow", request)) return { behavior: "allow" };
-    return this.modePolicy.evaluate(request);
+    return modeDecision;
   }
 
   private findMatch(
@@ -131,7 +138,7 @@ function compileTargetMatcher(
       ? normalizePath(resolve(request.cwd, normalizePath(specifier)))
       : specifier;
     /** permissionTarget 是执行时真正的目标或路径
-     * 通过 tool.getPermissionTarget(input, context) 获得的
+     * 通过 tool.getPermissionDescriptor(input, context) 获得的
     */
     const actual = isFileRule
       ? normalizePath(request.permissionTarget)

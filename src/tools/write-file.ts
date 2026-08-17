@@ -7,9 +7,13 @@ import type { Tool } from "./types.ts";
 
 export const writeFileTool: Tool = {
   name: "write_file",
-  permissionKind: "edit",
-  getPermissionTarget: (input, context) =>
-    normalizePermissionPath(context.cwd, String(input.file_path ?? "")),
+  getPermissionDescriptor: (input, context) => ({
+    permissionKind: "edit",
+    permissionTarget: normalizePermissionPath(
+      context.cwd,
+      String(input.file_path ?? ""),
+    ),
+  }),
   description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
   input_schema: {
     type: "object",

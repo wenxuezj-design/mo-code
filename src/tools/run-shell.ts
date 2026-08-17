@@ -1,11 +1,18 @@
 import { exec } from "node:child_process";
 
+import { classifyShellCommand } from "./shell-command-semantics.ts";
 import type { Tool, ToolExecutionResult } from "./types.ts";
 
 export const runShellTool: Tool = {
   name: "run_shell",
-  permissionKind: "shell",
-  getPermissionTarget: (input) => String(input.command ?? ""),
+  getPermissionDescriptor: (input) => {
+    const command = String(input.command ?? "");
+    return {
+      permissionKind: "shell",
+      permissionTarget: command,
+      shellSemantics: classifyShellCommand(command),
+    };
+  },
   description: "Execute a shell command and return its output. Use this for running tests, installing packages, git operations, etc.",
   input_schema: {
     type: "object",

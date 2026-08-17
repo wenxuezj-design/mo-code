@@ -6,9 +6,13 @@ import type { Tool } from "./types.ts";
 
 export const editFileTool: Tool = {
   name: "edit_file",
-  permissionKind: "edit",
-  getPermissionTarget: (input, context) =>
-    normalizePermissionPath(context.cwd, String(input.file_path ?? "")),
+  getPermissionDescriptor: (input, context) => ({
+    permissionKind: "edit",
+    permissionTarget: normalizePermissionPath(
+      context.cwd,
+      String(input.file_path ?? ""),
+    ),
+  }),
   description: "Edit a file by replacing an exact string match with new content. The old_string must match exactly and be unique.",
   input_schema: {
     type: "object",

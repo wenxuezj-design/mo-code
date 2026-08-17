@@ -5,13 +5,14 @@ import type { Tool } from "./types.ts";
 
 export const listFilesTool: Tool = {
   name: "list_files",
-  permissionKind: "read",
-  getPermissionTarget: (input, context) =>
-    normalizePermissionPath(
+  getPermissionDescriptor: (input, context) => ({
+    permissionKind: "read",
+    permissionTarget: normalizePermissionPath(
       context.cwd,
       String(input.path ?? "."),
       String(input.pattern ?? ""),
     ),
+  }),
   description: "List files matching a glob pattern. Returns matching file paths.",
   input_schema: {
     type: "object",

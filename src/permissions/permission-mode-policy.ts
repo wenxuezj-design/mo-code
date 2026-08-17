@@ -61,6 +61,13 @@ export class PermissionModePolicy implements PermissionPolicy {
   }
 
   evaluate(request: PermissionRequest): PermissionDecision {
+    if (
+      request.permissionKind === "shell"
+      && request.shellSemantics === "readOnly"
+    ) {
+      return { behavior: "allow" };
+    }
+
     const behavior = MODE_BEHAVIORS[this.mode][request.permissionKind];
     if (behavior === "allow") return { behavior };
 

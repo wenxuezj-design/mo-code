@@ -38,9 +38,13 @@ test("公共工具定义不暴露 execute", () => {
   }));
 });
 
-test("每个工具声明自己的权限类别", () => {
+test("每个工具通过统一描述声明自己的权限类别", () => {
+  const context = createContext();
   assert.deepEqual(
-    Object.fromEntries(tools.map((tool) => [tool.name, tool.permissionKind])),
+    Object.fromEntries(tools.map((tool) => [
+      tool.name,
+      tool.getPermissionDescriptor({}, context).permissionKind,
+    ])),
     {
       read_file: "read",
       write_file: "edit",
@@ -73,37 +77,64 @@ test("executeTool 把工具权限类别传给 PermissionGate", async () => {
   assert.equal(receivedRequest.permissionTarget, resolve(process.cwd(), "no-match-*"));
 });
 
+test("executeTool 把 Shell 命令语义传给 PermissionGate", async () => {
+  let receivedRequest;
+  const permissionGate = new PermissionGate({
+    policy: {
+      evaluate(request) {
+        receivedRequest = request;
+        return { behavior: "deny", reason: "stop before execution" };
+      },
+    },
+  });
+
+  await executeTool("run_shell", { command: "pwd && git status" }, createContext({
+    permissionGate,
+  }));
+
+  assert.equal(receivedRequest.permissionKind, "shell");
+  assert.equal(receivedRequest.permissionTarget, "pwd && git status");
+  assert.equal(receivedRequest.shellSemantics, "readOnly");
+});
+
 test("工具从各自输入生成权限匹配目标", () => {
   const context = createContext();
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
   assert.equal(
-    byName.get("read_file").getPermissionTarget(
+    byName.get("read_file").getPermissionDescriptor(
       { file_path: "./src/../package.json" },
       context,
-    ),
+    ).permissionTarget,
     resolve(context.cwd, "package.json"),
   );
   assert.equal(
-    byName.get("list_files").getPermissionTarget(
+    byName.get("list_files").getPermissionDescriptor(
       { path: "src", pattern: "**/*.ts" },
       context,
-    ),
+    ).permissionTarget,
     resolve(context.cwd, "src/**/*.ts"),
   );
   assert.equal(
-    byName.get("grep_search").getPermissionTarget({}, context),
+    byName.get("grep_search").getPermissionDescriptor({}, context).permissionTarget,
     resolve(context.cwd),
   );
-  assert.equal(
-    byName.get("run_shell").getPermissionTarget({ command: "pnpm test" }, context),
-    "pnpm test",
-  );
-  assert.equal(
-    byName.get("web_fetch").getPermissionTarget(
-      { url: "https://example.com/docs" },
+  assert.deepEqual(
+    byName.get("run_shell").getPermissionDescriptor(
+      { command: "pnpm test" },
       context,
     ),
+    {
+      permissionKind: "shell",
+      permissionTarget: "pnpm test",
+      shellSemantics: "unknown",
+    },
+  );
+  assert.equal(
+    byName.get("web_fetch").getPermissionDescriptor(
+      { url: "https://example.com/docs" },
+      context,
+    ).permissionTarget,
     "https://example.com/docs",
   );
 });

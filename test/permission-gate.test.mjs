@@ -7,6 +7,7 @@ const request = {
   toolName: "run_shell",
   permissionKind: "shell",
   permissionTarget: "pnpm test",
+  shellSemantics: "unknown",
   input: { command: "pnpm test" },
   cwd: "/project",
 };

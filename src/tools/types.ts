@@ -1,6 +1,6 @@
 import type {
   PermissionGate,
-  PermissionKind,
+  ToolPermissionDescriptor,
 } from "../permissions/index.ts";
 
 export type ToolDef = {
@@ -40,11 +40,10 @@ export type ToolHandler = (
 ) => Promise<string | ToolExecutionResult> | string | ToolExecutionResult;
 
 export type Tool = ToolDef & {
-  permissionKind: PermissionKind;
-  getPermissionTarget: (
+  getPermissionDescriptor: (
     input: Record<string, unknown>,
     context: ToolContext,
-  ) => string;
+  ) => ToolPermissionDescriptor;
   validateInput?: ToolValidator;
   isConcurrencySafe?: (input: Record<string, unknown>) => boolean;
   execute: ToolHandler;

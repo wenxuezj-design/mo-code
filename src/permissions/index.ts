@@ -15,6 +15,8 @@ export type {
   PermissionPolicy,
   PermissionPrompter,
   PermissionRequest,
+  ShellCommandSemantics,
+  ToolPermissionDescriptor,
 } from "./types.ts";
 
 export type {

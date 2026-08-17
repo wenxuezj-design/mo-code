@@ -6,9 +6,13 @@ import type { Tool } from "./types.ts";
 
 export const readFileTool: Tool = {
   name: "read_file",
-  permissionKind: "read",
-  getPermissionTarget: (input, context) =>
-    normalizePermissionPath(context.cwd, String(input.file_path ?? "")),
+  getPermissionDescriptor: (input, context) => ({
+    permissionKind: "read",
+    permissionTarget: normalizePermissionPath(
+      context.cwd,
+      String(input.file_path ?? ""),
+    ),
+  }),
   description: "Read the contents of a file. Returns the file content with line numbers.",
   input_schema: {
     type: "object",

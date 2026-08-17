@@ -213,6 +213,7 @@ function request(toolName, permissionKind, permissionTarget) {
     toolName,
     permissionKind,
     permissionTarget,
+    ...(permissionKind === "shell" ? { shellSemantics: "unknown" } : {}),
     input: {},
     cwd: "/project",
   };

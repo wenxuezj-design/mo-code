@@ -69,6 +69,7 @@ function createRequest(permissionKind) {
     toolName: "example_tool",
     permissionKind,
     permissionTarget: "example-target",
+    ...(permissionKind === "shell" ? { shellSemantics: "unknown" } : {}),
     input: {},
     cwd: "/project",
   };

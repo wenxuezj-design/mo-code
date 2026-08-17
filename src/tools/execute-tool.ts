@@ -31,11 +31,11 @@ export async function executeTool(
   const validation = await tool.validateInput?.(input, context);
   if (validation && !validation.ok) return errorResult(validation.message);
 
+  const permission = tool.getPermissionDescriptor(input, context);
   /** 得到权限验证后的结果（是否同意，同意会携带结果）*/
   const authorization = await context.permissionGate.authorize({
+    ...permission,
     toolName: name,
-    permissionKind: tool.permissionKind,
-    permissionTarget: tool.getPermissionTarget(input, context),
     input,
     cwd: context.cwd,
     signal: context.signal,

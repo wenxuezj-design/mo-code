@@ -7,10 +7,21 @@ export type PermissionMode =
 
 export type PermissionKind = "read" | "edit" | "shell" | "network";
 
-export type PermissionRequest = {
+export type ShellCommandSemantics = "readOnly" | "mutating" | "unknown";
+
+export type ToolPermissionDescriptor =
+  | {
+    permissionKind: Exclude<PermissionKind, "shell">;
+    permissionTarget: string;
+  }
+  | {
+    permissionKind: "shell";
+    permissionTarget: string;
+    shellSemantics: ShellCommandSemantics;
+  };
+
+export type PermissionRequest = ToolPermissionDescriptor & {
   toolName: string;
-  permissionKind: PermissionKind;
-  permissionTarget: string;
   input: Record<string, unknown>;
   cwd: string;
   signal?: AbortSignal;
