@@ -1,0 +1,50 @@
+{
+  "wakaba-mortis-confused-v1": {
+    "label": "若叶墨 · 困惑",
+    "character": "若叶墨",
+    "expression": "困惑",
+    "file": "wakaba-mortis/character-sheet-v1.webp",
+    "crop": {
+      "x": 835,
+      "y": 80,
+      "width": 380,
+      "height": 380
+    }
+  },
+  "toyokawa-sakiko-serious-v1": {
+    "label": "丰川祥子 · 认真",
+    "character": "丰川祥子",
+    "expression": "认真",
+    "file": "toyokawa-sakiko/character-sheet-v1.webp",
+    "crop": {
+      "x": 50,
+      "y": 20,
+      "width": 390,
+      "height": 390
+    }
+  },
+  "wakaba-mutsu-gentle-v1": {
+    "label": "若叶睦 · 温柔",
+    "character": "若叶睦",
+    "expression": "温柔",
+    "file": "wakaba-mutsu/character-sheet-v1.webp",
+    "crop": {
+      "x": 1050,
+      "y": 0,
+      "width": 390,
+      "height": 390
+    }
+  },
+  "mori-minami-cheerful-v1": {
+    "label": "森美奈美 · 开朗",
+    "character": "森美奈美",
+    "expression": "开朗",
+    "file": "mori-minami/character-sheet-v1.webp",
+    "crop": {
+      "x": 60,
+      "y": 30,
+      "width": 390,
+      "height": 390
+    }
+  }
+}

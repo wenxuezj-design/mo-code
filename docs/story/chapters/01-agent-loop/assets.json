@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "chapter": "01-agent-loop",
+  "pages": {
+    "01": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-01-base-v1.webp",
+        "cacheFile": "page-01-base.webp",
+        "sha256": "bf956a4a9742029f588007a8835b9131ebfacc7ec8c742457c7405f7e9169d55",
+        "bytes": 315524,
+        "width": 864,
+        "height": 1821
+      }
+    },
+    "02": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-02-base-v1.webp",
+        "cacheFile": "page-02-base.webp",
+        "sha256": "f074c6310e6e0c12d5bd14457e9bc375026cfe0684a46e5f5d35d3ef3de32bfc",
+        "bytes": 325886,
+        "width": 864,
+        "height": 1820
+      }
+    },
+    "03": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-03-base-v1.webp",
+        "cacheFile": "page-03-base.webp",
+        "sha256": "46d0b6bbd91d5118d14ab9bfccc6eaa1114d136c5b8b7371be2b9a4f208dddaa",
+        "bytes": 352126,
+        "width": 864,
+        "height": 1821
+      }
+    },
+    "04": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-04-base-v1.webp",
+        "cacheFile": "page-04-base.webp",
+        "sha256": "0bfdb1eb279db5ab6eed3d84b16df11c1cf66c6075e9dcc510814ba0240bf234",
+        "bytes": 274666,
+        "width": 864,
+        "height": 1821
+      }
+    },
+    "05": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-05-base-v1.webp",
+        "cacheFile": "page-05-base.webp",
+        "sha256": "8c21c90b7f321f8a80b18c965c4a48c4536de0c04485beee8e64dc83c15a74a1",
+        "bytes": 351188,
+        "width": 868,
+        "height": 1812
+      }
+    },
+    "06": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-06-base-v1.webp",
+        "cacheFile": "page-06-base.webp",
+        "sha256": "d5e95c9c00242569d98014d4ad2ed267b0d84d24d6032fa1ac088988ada740e2",
+        "bytes": 351316,
+        "width": 868,
+        "height": 1812
+      }
+    },
+    "07": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-07-base-v1.webp",
+        "cacheFile": "page-07-base.webp",
+        "sha256": "46f1e544dcb108b8602449f6060473b681296f453bea33b54a0e349d02ec723a",
+        "bytes": 374340,
+        "width": 868,
+        "height": 1812
+      }
+    },
+    "08": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-08-base-v1.webp",
+        "cacheFile": "page-08-base.webp",
+        "sha256": "c01e4a476fa6a32588dc27ec1df3f9a92e5300c5105c08241cd72d4e230d5ee5",
+        "bytes": 353618,
+        "width": 862,
+        "height": 1825
+      }
+    },
+    "09": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-09-base-v1.webp",
+        "cacheFile": "page-09-base.webp",
+        "sha256": "eb8ca0b0f22a03822ab0d7216963fee1c421a2969dc3a986faa37746c1033ad5",
+        "bytes": 394832,
+        "width": 854,
+        "height": 1840
+      }
+    },
+    "10": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-10-base-v1.webp",
+        "cacheFile": "page-10-base.webp",
+        "sha256": "6449492fc586f3929dda8d333455dea34c91c152f35279513df8976ab6cb73b1",
+        "bytes": 393654,
+        "width": 853,
+        "height": 1844
+      }
+    },
+    "11": {
+      "base": {
+        "remotePath": "chapters/01-agent-loop/bases/page-11-base-v1.webp",
+        "cacheFile": "page-11-base.webp",
+        "sha256": "77a9e25c965a1d0e7a15077fa1912864ef75f7db6ec4f0007c9b0092d4783ee1",
+        "bytes": 356270,
+        "width": 853,
+        "height": 1844
+      }
+    }
+  }
+}
