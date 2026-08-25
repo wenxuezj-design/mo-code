@@ -331,38 +331,47 @@ test("CLI 加载权限规则并应用到真实工具调用", async () => {
 });
 
 test("交互模式使用同一个终端输入完成工具权限确认", async () => {
-  const result = await captureCliRequest(
-    [],
-    "run command\n1\n/exit\n",
-    {
-      responses: [
-        {
-          content: [{
-            type: "tool_use",
-            id: "toolu_permission_prompt_0",
-            name: "run_shell",
-            input: { command: "true > /dev/null" },
-          }],
-          stop_reason: "tool_use",
-        },
-        { content: [{ type: "text", text: "done" }] },
-      ],
-    },
+  const outputPath = join(
+    projectRoot,
+    `.mo-code-permission-prompt-${process.pid}-${Date.now()}.txt`,
   );
+  const command = `touch ${outputPath}`;
+  try {
+    const result = await captureCliRequest(
+      [],
+      "run command\n1\n/exit\n",
+      {
+        responses: [
+          {
+            content: [{
+              type: "tool_use",
+              id: "toolu_permission_prompt_0",
+              name: "run_shell",
+              input: { command },
+            }],
+            stop_reason: "tool_use",
+          },
+          { content: [{ type: "text", text: "done" }] },
+        ],
+      },
+    );
 
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stderr, "");
-  assert.equal(result.requests.length, 2);
-  assert.match(result.stdout, /权限确认/);
-  assert.match(result.stdout, /工具: run_shell/);
-  assert.match(result.stdout, /目标: true > \/dev\/null/);
-  assert.match(result.stdout, /1\. 仅允许本次/);
-  assert.match(result.stdout, /2\. 在当前项目中不再询问此命令/);
-  assert.match(result.stdout, /3\. 拒绝并告诉 Agent 如何调整/);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.requests.length, 2);
+    assert.match(result.stdout, /权限确认/);
+    assert.match(result.stdout, /工具: run_shell/);
+    assert.match(result.stdout, new RegExp(`目标: ${escapeRegExp(command)}`));
+    assert.match(result.stdout, /1\. 仅允许本次/);
+    assert.match(result.stdout, /2\. 在当前项目中不再询问此命令/);
+    assert.match(result.stdout, /3\. 拒绝并告诉 Agent 如何调整/);
 
-  const toolResult = result.requests[1].messages.at(-1).content[0];
-  assert.equal(toolResult.type, "tool_result");
-  assert.equal(toolResult.is_error, undefined);
+    const toolResult = result.requests[1].messages.at(-1).content[0];
+    assert.equal(toolResult.type, "tool_result");
+    assert.equal(toolResult.is_error, undefined);
+  } finally {
+    rmSync(outputPath, { force: true });
+  }
 });
 
 test("--print 遇到 ask 时不读取输入并把非交互拒绝返回模型", async () => {
@@ -675,8 +684,8 @@ test("--resume 和 -r 恢复指定会话并继续写入原文件", async () => {
 
 test("--resume 把会话授权恢复到 Agent 并随新 turn 继续保存", async () => {
   const outputPath = join(
-    tmpdir(),
-    `mo-code-resumed-grant-${process.pid}-${Date.now()}.txt`,
+    projectRoot,
+    `.mo-code-resumed-grant-${process.pid}-${Date.now()}.txt`,
   );
   const initialSession = createStoredSession({ permissionGrants: ["edit:*"] });
   try {

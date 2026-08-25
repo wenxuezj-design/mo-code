@@ -77,6 +77,101 @@ test("executeTool 把工具权限类别传给 PermissionGate", async () => {
   assert.equal(receivedRequest.permissionTarget, resolve(process.cwd(), "no-match-*"));
 });
 
+test("内置文件工具声明实际文件系统访问目标", () => {
+  const context = createContext({ cwd: resolve("workspace") });
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  assert.deepEqual(
+    byName.get("read_file").getPermissionDescriptor(
+      { file_path: "src/app.ts" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "src/app.ts"), operation: "read" }],
+    },
+  );
+  for (const toolName of ["write_file", "edit_file"]) {
+    assert.deepEqual(
+      byName.get(toolName).getPermissionDescriptor(
+        { file_path: "src/app.ts" },
+        context,
+      ).filesystemAccesses,
+      {
+        status: "known",
+        accesses: [{ path: resolve(context.cwd, "src/app.ts"), operation: "write" }],
+      },
+    );
+  }
+  const listDescriptor = byName.get("list_files").getPermissionDescriptor(
+    { path: "src", pattern: "*.ts" },
+    context,
+  );
+  assert.equal(listDescriptor.permissionTarget, resolve(context.cwd, "src/*.ts"));
+  assert.deepEqual(listDescriptor.filesystemAccesses, {
+    status: "known",
+    accesses: [{ path: resolve(context.cwd, "src"), operation: "read" }],
+  });
+  assert.deepEqual(
+    byName.get("list_files").getPermissionDescriptor(
+      { pattern: "../shared/*.ts" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "../shared"), operation: "read" }],
+    },
+  );
+  const absolutePattern = resolve(context.cwd, "../outside/*.ts");
+  assert.deepEqual(
+    byName.get("list_files").getPermissionDescriptor(
+      { pattern: absolutePattern },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "../outside"), operation: "read" }],
+    },
+  );
+  for (const pattern of [
+    "**/*.ts",
+    "[.][.]/outside/*.txt",
+    "*/secret.txt",
+  ]) {
+    assert.deepEqual(
+      byName.get("list_files").getPermissionDescriptor(
+        { pattern },
+        context,
+      ).filesystemAccesses,
+      { status: "unknown" },
+      pattern,
+    );
+  }
+  assert.deepEqual(
+    byName.get("list_files").getPermissionDescriptor(
+      { pattern: "link/../*.ts" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{
+        path: context.cwd,
+        operation: "read",
+      }],
+    },
+  );
+  assert.deepEqual(
+    byName.get("grep_search").getPermissionDescriptor(
+      { path: "src", pattern: "Agent" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "src"), operation: "read" }],
+    },
+  );
+});
+
 test("executeTool 把 Shell 命令语义传给 PermissionGate", async () => {
   let receivedRequest;
   const permissionGate = new PermissionGate({
@@ -119,23 +214,19 @@ test("工具从各自输入生成权限匹配目标", () => {
     byName.get("grep_search").getPermissionDescriptor({}, context).permissionTarget,
     resolve(context.cwd),
   );
-  assert.deepEqual(
-    byName.get("run_shell").getPermissionDescriptor(
-      { command: "pnpm test" },
-      context,
-    ),
-    {
-      permissionKind: "shell",
-      permissionTarget: "pnpm test",
-      shellSemantics: "unknown",
-      grant: {
-        scope: "persistent",
-        key: "run_shell:pnpm test",
-        rule: "run_shell(pnpm test)",
-        label: "在当前项目中不再询问此命令",
-      },
-    },
+  const shellDescriptor = byName.get("run_shell").getPermissionDescriptor(
+    { command: "pnpm test" },
+    context,
   );
+  assert.equal(shellDescriptor.permissionKind, "shell");
+  assert.equal(shellDescriptor.permissionTarget, "pnpm test");
+  assert.equal(shellDescriptor.shellSemantics, "unknown");
+  assert.deepEqual(shellDescriptor.grant, {
+    scope: "persistent",
+    key: "run_shell:pnpm test",
+    rule: "run_shell(pnpm test)",
+    label: "在当前项目中不再询问此命令",
+  });
   assert.deepEqual(
     byName.get("web_fetch").getPermissionDescriptor(
       { url: "https://example.com/docs" },
@@ -225,14 +316,14 @@ test("executeTool 要求显式提供 PermissionGate", async () => {
   );
 });
 
-test("executeTool 先校验输入，通过后才检查权限", async () => {
+test("executeTool 先检查权限，授权后才校验输入", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mo-code-validation-order-"));
   let permissionChecks = 0;
   const permissionGate = new PermissionGate({
     policy: {
       evaluate() {
         permissionChecks++;
-        return { behavior: "deny", reason: "should not be reached" };
+        return { behavior: "deny", reason: "blocked before validation" };
       },
     },
   });
@@ -247,10 +338,10 @@ test("executeTool 先校验输入，通过后才检查权限", async () => {
     }, createContext({ permissionGate }));
 
     assert.deepEqual(result, {
-      content: "Error: You must read this file before writing. Use read_file first.",
+      content: "Permission denied: blocked before validation",
       isError: true,
     });
-    assert.equal(permissionChecks, 0);
+    assert.equal(permissionChecks, 1);
     assert.equal(readFileSync(filePath, "utf-8"), "old");
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -300,11 +391,66 @@ test("read_file 成功后记录文件 mtimeMs", async () => {
 
     await executeTool(
       "read_file",
-      { file_path: filePath },
-      createContext({ readFileState }),
+      { file_path: "hello.txt" },
+      createContext({ cwd: dir, readFileState }),
     );
 
     assert.equal(readFileState.get(resolve(filePath)), statSync(filePath).mtimeMs);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("内置文件工具统一以 ToolContext.cwd 解析相对路径", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mo-code-tool-cwd-"));
+  const context = createContext({ cwd: dir });
+
+  try {
+    const filePath = join(dir, "notes", "hello.txt");
+    const writeResult = await executeTool("write_file", {
+      file_path: "notes/hello.txt",
+      content: "hello agent",
+    }, context);
+    assert.deepEqual(writeResult, {
+      content: `Successfully wrote to ${filePath}`,
+      isError: false,
+    });
+    assert.equal(readFileSync(filePath, "utf-8"), "hello agent");
+
+    const readResult = await executeTool(
+      "read_file",
+      { file_path: "notes/hello.txt" },
+      context,
+    );
+    assert.deepEqual(readResult, {
+      content: "   1 | hello agent",
+      isError: false,
+    });
+
+    const editResult = await executeTool("edit_file", {
+      file_path: "notes/hello.txt",
+      old_string: "hello",
+      new_string: "hi",
+    }, context);
+    assert.equal(editResult.isError, false);
+    assert.match(editResult.content, new RegExp(`^Successfully edited ${filePath}`));
+    assert.equal(readFileSync(filePath, "utf-8"), "hi agent");
+
+    const listResult = await executeTool(
+      "list_files",
+      { path: "notes", pattern: "*.txt" },
+      context,
+    );
+    assert.deepEqual(listResult, { content: "hello.txt", isError: false });
+
+    const grepResult = await executeTool("grep_search", {
+      path: "notes",
+      pattern: "agent",
+    }, context);
+    assert.deepEqual(grepResult, {
+      content: `${filePath}:1:hi agent`,
+      isError: false,
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

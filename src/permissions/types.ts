@@ -9,6 +9,23 @@ export type PermissionKind = "read" | "edit" | "shell" | "network";
 
 export type ShellCommandSemantics = "readOnly" | "mutating" | "unknown";
 
+export type FilesystemOperation = "read" | "write" | "delete";
+
+export type FilesystemAccess = {
+  path: string;
+  operation: FilesystemOperation;
+  recursive?: boolean;
+};
+
+export type FilesystemAccessPlan =
+  | { status: "known"; accesses: FilesystemAccess[] }
+  | {
+    status: "unknown";
+    accesses?: FilesystemAccess[];
+    /** 无法枚举目标，但已知递归删除可能经符号链接到达 root/Home。 */
+    catastrophicDeleteRisk?: true;
+  };
+
 export type PermissionGrantProposal =
   | {
     scope: "session";
@@ -22,18 +39,21 @@ export type PermissionGrantProposal =
     label: string;
   };
 
-export type ToolPermissionDescriptor =
+type ToolPermissionDescriptorBase = {
+  permissionTarget: string;
+  grant?: PermissionGrantProposal;
+  filesystemAccesses?: FilesystemAccessPlan;
+};
+
+export type ToolPermissionDescriptor = ToolPermissionDescriptorBase & (
   | {
     permissionKind: Exclude<PermissionKind, "shell">;
-    permissionTarget: string;
-    grant?: PermissionGrantProposal;
   }
   | {
     permissionKind: "shell";
-    permissionTarget: string;
     shellSemantics: ShellCommandSemantics;
-    grant?: PermissionGrantProposal;
-  };
+  }
+);
 
 export type PermissionRequest = ToolPermissionDescriptor & {
   toolName: string;

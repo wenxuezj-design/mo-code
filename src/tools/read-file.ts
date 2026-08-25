@@ -1,18 +1,28 @@
 import { readFileSync } from "node:fs";
 
 import { recordFileState } from "./file-state.ts";
-import { normalizePermissionPath } from "./permission-target.ts";
+import {
+  normalizePermissionPath,
+  resolveToolPath,
+} from "./permission-target.ts";
 import type { Tool } from "./types.ts";
 
 export const readFileTool: Tool = {
   name: "read_file",
-  getPermissionDescriptor: (input, context) => ({
-    permissionKind: "read",
-    permissionTarget: normalizePermissionPath(
+  getPermissionDescriptor(input, context) {
+    const filePath = resolveToolPath(
       context.cwd,
       String(input.file_path ?? ""),
-    ),
-  }),
+    );
+    return {
+      permissionKind: "read",
+      permissionTarget: normalizePermissionPath(filePath),
+      filesystemAccesses: {
+        status: "known",
+        accesses: [{ path: filePath, operation: "read" }],
+      },
+    };
+  },
   description: "Read the contents of a file. Returns the file content with line numbers.",
   input_schema: {
     type: "object",
@@ -23,7 +33,7 @@ export const readFileTool: Tool = {
   },
   isConcurrencySafe: () => true,
   execute(input, context) {
-    const filePath = String(input.file_path ?? "");
+    const filePath = resolveToolPath(context.cwd, String(input.file_path ?? ""));
     const result = readFile({ file_path: filePath });
     if (!result.startsWith("Error")) {
       const warning = recordFileState(filePath, context);

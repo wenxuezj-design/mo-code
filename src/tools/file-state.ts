@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
 
+import { resolveToolPath } from "./permission-target.ts";
 import type { ToolContext, ValidationResult } from "./types.ts";
 
 type FileMutationAction = "writing" | "editing";
@@ -11,7 +11,7 @@ export function validateFileMutation(
   context: ToolContext,
 ): ValidationResult {
   const { readFileState } = context;
-  const absPath = resolve(filePath);
+  const absPath = resolveToolPath(context.cwd, filePath);
   let currentMtime: number;
   try {
     currentMtime = statSync(absPath).mtimeMs;
@@ -41,7 +41,7 @@ export function validateFileMutation(
 }
 
 export function recordFileState(filePath: string, context: ToolContext): string | null {
-  const absPath = resolve(filePath);
+  const absPath = resolveToolPath(context.cwd, filePath);
   try {
     context.readFileState.set(absPath, statSync(absPath).mtimeMs);
     return null;

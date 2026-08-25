@@ -2,23 +2,33 @@ import { dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 import { recordFileState, validateFileMutation } from "./file-state.ts";
-import { normalizePermissionPath } from "./permission-target.ts";
+import {
+  normalizePermissionPath,
+  resolveToolPath,
+} from "./permission-target.ts";
 import type { Tool } from "./types.ts";
 
 export const writeFileTool: Tool = {
   name: "write_file",
-  getPermissionDescriptor: (input, context) => ({
-    permissionKind: "edit",
-    permissionTarget: normalizePermissionPath(
+  getPermissionDescriptor(input, context) {
+    const filePath = resolveToolPath(
       context.cwd,
       String(input.file_path ?? ""),
-    ),
-    grant: {
-      scope: "session",
-      key: "edit:*",
-      label: "当前会话不再询问文件编辑",
-    },
-  }),
+    );
+    return {
+      permissionKind: "edit",
+      permissionTarget: normalizePermissionPath(filePath),
+      filesystemAccesses: {
+        status: "known",
+        accesses: [{ path: filePath, operation: "write" }],
+      },
+      grant: {
+        scope: "session",
+        key: "edit:*",
+        label: "当前会话不再询问文件编辑",
+      },
+    };
+  },
   description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
   input_schema: {
     type: "object",
@@ -32,7 +42,7 @@ export const writeFileTool: Tool = {
     return validateFileMutation(String(input.file_path ?? ""), "writing", context);
   },
   execute(input, context) {
-    const filePath = String(input.file_path ?? "");
+    const filePath = resolveToolPath(context.cwd, String(input.file_path ?? ""));
     const result = writeFile({
       file_path: filePath,
       content: String(input.content ?? ""),

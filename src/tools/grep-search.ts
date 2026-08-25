@@ -1,17 +1,27 @@
 import { execFileSync } from "node:child_process";
 
-import { normalizePermissionPath } from "./permission-target.ts";
+import {
+  normalizePermissionPath,
+  resolveToolPath,
+} from "./permission-target.ts";
 import type { Tool } from "./types.ts";
 
 export const grepSearchTool: Tool = {
   name: "grep_search",
-  getPermissionDescriptor: (input, context) => ({
-    permissionKind: "read",
-    permissionTarget: normalizePermissionPath(
+  getPermissionDescriptor(input, context) {
+    const searchPath = resolveToolPath(
       context.cwd,
       String(input.path ?? "."),
-    ),
-  }),
+    );
+    return {
+      permissionKind: "read",
+      permissionTarget: normalizePermissionPath(searchPath),
+      filesystemAccesses: {
+        status: "known",
+        accesses: [{ path: searchPath, operation: "read" }],
+      },
+    };
+  },
   description: "Search for a regex pattern in files. Returns matching lines with file paths and line numbers.",
   input_schema: {
     type: "object",
@@ -29,10 +39,10 @@ export const grepSearchTool: Tool = {
     required: ["pattern"],
   },
   isConcurrencySafe: () => true,
-  execute(input) {
+  execute(input, context) {
     return grepSearch({
       pattern: String(input.pattern ?? ""),
-      path: input.path === undefined ? undefined : String(input.path),
+      path: resolveToolPath(context.cwd, String(input.path ?? ".")),
       include: input.include === undefined ? undefined : String(input.include),
     });
   },
@@ -40,14 +50,14 @@ export const grepSearchTool: Tool = {
 
 export function grepSearch(input: {
   pattern: string;
-  path?: string;
+  path: string;
   include?: string;
 }): string {
   try {
     const args = ["--line-number", "--color=never"];
     if (input.include) args.push("-g", input.include);
     args.push("--", input.pattern);
-    args.push(input.path || ".");
+    args.push(input.path);
 
     const result = execFileSync("rg", args, {
       encoding: "utf-8",

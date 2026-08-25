@@ -1,16 +1,20 @@
 import { exec } from "node:child_process";
 
-import { classifyShellCommand } from "./shell-command-semantics.ts";
+import { analyzeShellCommand } from "./shell-command-semantics.ts";
 import type { Tool, ToolExecutionResult } from "./types.ts";
 
 export const runShellTool: Tool = {
   name: "run_shell",
-  getPermissionDescriptor: (input) => {
+  getPermissionDescriptor: (input, context) => {
     const command = String(input.command ?? "");
+    const analysis = analyzeShellCommand(command, context.cwd);
     return {
       permissionKind: "shell",
       permissionTarget: command,
-      shellSemantics: classifyShellCommand(command),
+      shellSemantics: analysis.semantics,
+      ...(analysis.filesystemAccesses
+        ? { filesystemAccesses: analysis.filesystemAccesses }
+        : {}),
       // 空命令无法形成合法的 tool(specifier) 规则，因此只允许单次确认。
       ...(command.trim().length > 0
         ? {
@@ -37,6 +41,7 @@ export const runShellTool: Tool = {
     return runShell({
       command: String(input.command ?? ""),
       timeout: input.timeout === undefined ? undefined : Number(input.timeout),
+      cwd: context.cwd,
     }, context.signal);
   },
 };
@@ -47,7 +52,7 @@ function escapePermissionRuleLiteral(value: string): string {
 }
 
 export function runShell(
-  input: { command: string; timeout?: number },
+  input: { command: string; timeout?: number; cwd?: string },
   signal?: AbortSignal,
 ): Promise<ToolExecutionResult> {
   const timeout = input.timeout || 30000;
@@ -58,6 +63,7 @@ export function runShell(
         encoding: "utf-8",
         maxBuffer: 5 * 1024 * 1024,
         timeout,
+        cwd: input.cwd,
         signal,
         shell: process.platform === "win32" ? "powershell.exe" : "/bin/sh",
       }, (error, stdout, stderr) => {

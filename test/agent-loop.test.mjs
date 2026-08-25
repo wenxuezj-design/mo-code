@@ -200,7 +200,7 @@ test("Agent 在完整工具调用形成后继续流式请求", async () => {
 });
 
 test("Agent 切换权限模式后立即改变实际工具授权结果", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mo-code-agent-permission-"));
+  const dir = mkdtempSync(join(process.cwd(), ".mo-code-agent-permission-"));
   const filePath = join(dir, "blocked.txt");
   const mock = await startMockLLM({
     responses: [

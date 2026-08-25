@@ -4,6 +4,7 @@ export {
   denyByDefaultPermissionPrompter,
 } from "./permission-gate.ts";
 export { PermissionModePolicy } from "./permission-mode-policy.ts";
+export { PathBoundary } from "./path-boundary.ts";
 export { PermissionRulePolicy } from "./permission-rule-policy.ts";
 export {
   addLocalPermissionAllowRule,
@@ -11,6 +12,9 @@ export {
 } from "./permission-settings.ts";
 
 export type {
+  FilesystemAccess,
+  FilesystemAccessPlan,
+  FilesystemOperation,
   PermissionAuthorization,
   PermissionDecision,
   PermissionGrantProposal,
@@ -23,6 +27,11 @@ export type {
   ShellCommandSemantics,
   ToolPermissionDescriptor,
 } from "./types.ts";
+
+export type {
+  PathBoundaryAssessment,
+  ResolvedFilesystemAccess,
+} from "./path-boundary.ts";
 
 export type {
   LoadedPermissionSettings,
