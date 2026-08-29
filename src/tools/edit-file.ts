@@ -1,10 +1,33 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { recordFileState, validateFileMutation } from "./file-state.ts";
+import {
+  normalizePermissionPath,
+  resolveToolPath,
+} from "./permission-target.ts";
 import type { Tool } from "./types.ts";
 
 export const editFileTool: Tool = {
   name: "edit_file",
+  getPermissionDescriptor(input, context) {
+    const filePath = resolveToolPath(
+      context.cwd,
+      String(input.file_path ?? ""),
+    );
+    return {
+      permissionKind: "edit",
+      permissionTarget: normalizePermissionPath(filePath),
+      filesystemAccesses: {
+        status: "known",
+        accesses: [{ path: filePath, operation: "write" }],
+      },
+      grant: {
+        scope: "session",
+        key: "edit:*",
+        label: "当前会话不再询问文件编辑",
+      },
+    };
+  },
   description: "Edit a file by replacing an exact string match with new content. The old_string must match exactly and be unique.",
   input_schema: {
     type: "object",
@@ -19,7 +42,7 @@ export const editFileTool: Tool = {
     return validateFileMutation(String(input.file_path ?? ""), "editing", context);
   },
   execute(input, context) {
-    const filePath = String(input.file_path ?? "");
+    const filePath = resolveToolPath(context.cwd, String(input.file_path ?? ""));
     const result = editFile({
       file_path: filePath,
       old_string: String(input.old_string ?? ""),

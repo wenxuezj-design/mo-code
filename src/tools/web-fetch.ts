@@ -1,7 +1,27 @@
 import type { Tool } from "./types.ts";
 
+const MAX_REDIRECTS = 10;
+
 export const webFetchTool: Tool = {
   name: "web_fetch",
+  getPermissionDescriptor: (input) => {
+    const rawUrl = String(input.url ?? "");
+    const parsedUrl = parseHttpUrl(rawUrl);
+    return {
+      permissionKind: "network",
+      permissionTarget: parsedUrl?.href ?? rawUrl,
+      ...(parsedUrl
+        ? {
+          grant: {
+            scope: "persistent" as const,
+            key: `web_fetch:${parsedUrl.origin}`,
+            rule: `web_fetch(${parsedUrl.origin}/*)`,
+            label: `不再询问 ${parsedUrl.origin}`,
+          },
+        }
+        : {}),
+    };
+  },
   description: "Fetch a URL and return its content as text. For HTML pages, tags are stripped to return readable text. For JSON/text responses, content is returned directly.",
   input_schema: {
     type: "object",
@@ -23,11 +43,23 @@ export const webFetchTool: Tool = {
   },
 };
 
+function parseHttpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function webFetch(
   input: { url: string; max_length?: number },
   signal?: AbortSignal,
 ): Promise<string> {
-  if (!input.url.startsWith("http://") && !input.url.startsWith("https://")) {
+  const initialUrl = parseHttpUrl(input.url);
+  if (!initialUrl) {
     return "Error: only http(s) URLs are supported";
   }
 
@@ -39,10 +71,34 @@ export async function webFetch(
   if (signal?.aborted) abortFromParent();
 
   try {
-    const response = await fetch(input.url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "mini-claude/1.0" },
-    });
+    let currentUrl = initialUrl;
+    let response: Response;
+    let redirectCount = 0;
+
+    while (true) {
+      response = await fetch(currentUrl, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: { "User-Agent": "mini-claude/1.0" },
+      });
+
+      if (!isRedirectResponse(response)) break;
+      if (redirectCount >= MAX_REDIRECTS) {
+        return `Error: too many redirects (maximum ${MAX_REDIRECTS})`;
+      }
+
+      const location = response.headers.get("location");
+      if (!location) return "Error: redirect response is missing Location";
+
+      const nextUrl = parseRedirectUrl(location, currentUrl);
+      if (!nextUrl) return "Error: redirect target must use http(s)";
+      if (nextUrl.origin !== initialUrl.origin) {
+        return `Error: cross-origin redirect blocked (${initialUrl.origin} -> ${nextUrl.origin})`;
+      }
+
+      currentUrl = nextUrl;
+      redirectCount++;
+    }
 
     if (!response.ok) {
       return `HTTP error: ${response.status} ${response.statusText}`;
@@ -69,6 +125,22 @@ export async function webFetch(
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abortFromParent);
+  }
+}
+
+function isRedirectResponse(response: Response): boolean {
+  return response.status === 301
+    || response.status === 302
+    || response.status === 303
+    || response.status === 307
+    || response.status === 308;
+}
+
+function parseRedirectUrl(location: string, baseUrl: URL): URL | undefined {
+  try {
+    return parseHttpUrl(new URL(location, baseUrl).href);
+  } catch {
+    return undefined;
   }
 }
 

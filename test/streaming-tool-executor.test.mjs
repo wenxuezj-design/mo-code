@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { startMockLLM } from "../mock/mock-llm.mjs";
-import { Agent, StreamingToolExecutor } from "../src/agent-loop.ts";
+import { Agent, StreamingToolExecutor } from "../src/agent/index.ts";
 
 test("安全工具在 accept 时启动，并按原始顺序返回结果", async () => {
   const execution = createControlledExecution();
@@ -70,7 +70,9 @@ test("中断时保留已完成结果，并为其余工具补齐错误结果", as
     (_name, input, context) => {
       const id = String(input.id);
       started.push(id);
-      if (id === "read-a") return Promise.resolve("A");
+      if (id === "read-a") {
+        return Promise.resolve({ content: "A", isError: false });
+      }
 
       return new Promise((_resolve, reject) => {
         context.signal?.addEventListener(
@@ -141,7 +143,12 @@ test("Agent 在模型流结束前启动已完成内容块中的安全工具", as
 
   let completed = false;
   try {
-    const chat = new Agent({ baseURL: mock.url, apiKey: "mock" })
+    const chat = new Agent({
+      baseURL: mock.url,
+      apiKey: "mock",
+      permissionMode: "bypassPermissions",
+      permissionSettings: { rules: [] },
+    })
       .chat("fetch")
       .then(() => {
         completed = true;
@@ -186,7 +193,7 @@ function createControlledExecution() {
     resolve(id, output) {
       const complete = pending.get(id);
       assert.ok(complete, `${id} has not started`);
-      complete(output);
+      complete({ content: output, isError: false });
     },
   };
 }

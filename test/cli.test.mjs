@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -42,7 +43,10 @@ test("--help 和 -h 显示 CLI 帮助后退出", () => {
     assert.match(result.stdout, /-r, --resume \[id\]/);
     assert.match(result.stdout, /--delete-session \[id\]/);
     assert.match(result.stdout, /--thinking/);
-    assert.match(result.stdout, /--mortis/);
+    assert.match(result.stdout, /--permission-mode <mode>/);
+    assert.match(result.stdout, /--dangerously-skip-permissions/);
+    assert.match(result.stdout, /--allow-dangerously-skip-permissions/);
+    assert.doesNotMatch(result.stdout, /--mortis/);
     assert.match(result.stdout, /--max-budget-usd <amount>/);
   }
 });
@@ -110,7 +114,7 @@ test("--model 和 -m 设置单次任务使用的模型", async () => {
   }
 });
 
-test("--permission-mode 提示权限控制尚未实现", async () => {
+test("--permission-mode 设置本次运行的权限模式", async () => {
   const result = await captureCliRequest([
     "--print",
     "--permission-mode",
@@ -119,9 +123,41 @@ test("--permission-mode 提示权限控制尚未实现", async () => {
   ]);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stderr, "Warning: --permission-mode 暂未实现权限控制\n");
+  assert.equal(result.stderr, "");
   assert.equal(result.requests.length, 1);
   assert.equal(result.requests[0].messages[0].content.at(-1).text, "hello");
+});
+
+test("权限模式参数缺失、无效或冲突时明确报错", async () => {
+  const cases = [
+    {
+      args: ["--permission-mode"],
+      message: "--permission-mode 缺少模式",
+    },
+    {
+      args: ["--permission-mode", "unknown"],
+      message: "无效的权限模式: unknown",
+    },
+    {
+      args: [
+        "--permission-mode",
+        "plan",
+        "--dangerously-skip-permissions",
+      ],
+      message: "--dangerously-skip-permissions 不能和其他 --permission-mode 同时使用",
+    },
+    {
+      args: ["--mortis"],
+      message: "未知参数: --mortis",
+    },
+  ];
+
+  for (const { args, message } of cases) {
+    const result = await captureCliRequest(args);
+    assert.equal(result.status, 1);
+    assert.equal(result.requests.length, 0);
+    assert.equal(result.stderr, `Error: ${message}\n`);
+  }
 });
 
 test("不带 --print 的 Prompt 进入交互模式", async () => {
@@ -154,6 +190,7 @@ test("/help 显示当前支持的 REPL 内置命令且不调用模型", async ()
   assert.match(result.stdout, /REPL 内置命令:/);
   assert.match(result.stdout, /\/help\s+显示这份帮助/);
   assert.match(result.stdout, /\/status\s+显示当前会话状态/);
+  assert.match(result.stdout, /\/permission-mode\s+选择权限模式/);
   assert.match(result.stdout, /\/thinking\s+切换 Extended Thinking/);
   assert.match(result.stdout, /\/exit, \/quit\s+退出交互模式/);
 });
@@ -171,9 +208,358 @@ test("/status 显示当前会话 ID、工作目录和模型且不调用模型", 
   );
   assert.match(result.stdout, new RegExp(`工作目录: ${escapeRegExp(projectRoot)}`));
   assert.match(result.stdout, /模型: mock/);
+  assert.match(result.stdout, /权限模式: default/);
   assert.match(result.stdout, /Thinking: 关闭/);
   assert.match(result.stdout, /Prompt Cache 写入: 0 tokens/);
   assert.match(result.stdout, /Prompt Cache 读取: 0 tokens/);
+});
+
+test("/permission-mode 通过编号切换当前进程的权限模式", async () => {
+  const result = await captureCliRequest(
+    [],
+    "/permission-mode\n3\n/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /选择权限模式:/);
+  assert.match(result.stdout, /1\. default（当前）/);
+  assert.match(result.stdout, /3\. plan/);
+  assert.match(result.stdout, /权限模式: plan/);
+});
+
+test("/permission-mode 对无效输入重试，并阻止未开放的 bypassPermissions", async () => {
+  const result = await captureCliRequest(
+    [],
+    "/permission-mode\ninvalid\n5\nq\n/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /5\. bypassPermissions（未开放）/);
+  assert.match(result.stdout, /请输入 1 到 5 之间的编号，或输入 q 取消/);
+  assert.match(
+    result.stdout,
+    /bypassPermissions 未开放，请使用 --allow-dangerously-skip-permissions 重新启动/,
+  );
+  assert.match(result.stdout, /已取消/);
+  assert.match(result.stdout, /权限模式: default/);
+});
+
+test("--allow-dangerously-skip-permissions 允许在 REPL 中切换 bypassPermissions", async () => {
+  const result = await captureCliRequest(
+    ["--allow-dangerously-skip-permissions"],
+    "/permission-mode\n5\n/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.doesNotMatch(result.stdout, /bypassPermissions（未开放）/);
+  assert.match(result.stdout, /权限模式: bypassPermissions/);
+});
+
+test("--dangerously-skip-permissions 直接进入 bypassPermissions", async () => {
+  const result = await captureCliRequest(
+    ["--dangerously-skip-permissions"],
+    "/status\n/exit\n",
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /权限模式: bypassPermissions/);
+});
+
+test("权限配置设置默认模式，命令行模式仍保持更高优先级", async () => {
+  const configured = await captureCliRequest(
+    [],
+    "/status\n/exit\n",
+    {
+      userSettings: {
+        permissions: { defaultMode: "plan" },
+      },
+    },
+  );
+  assert.equal(configured.status, 0, configured.stderr);
+  assert.match(configured.stdout, /权限模式: plan/);
+
+  const overridden = await captureCliRequest(
+    ["--permission-mode", "acceptEdits"],
+    "/status\n/exit\n",
+    {
+      userSettings: {
+        permissions: { defaultMode: "plan" },
+      },
+    },
+  );
+  assert.equal(overridden.status, 0, overridden.stderr);
+  assert.match(overridden.stdout, /权限模式: acceptEdits/);
+});
+
+test("首次进入项目时可接受信任并在 Agent 构造前启用项目权限配置", async () => {
+  const result = await captureCliRequest(
+    [],
+    "1\n/status\n/exit\n",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: {
+          allow: ["run_shell(echo trusted)"],
+          defaultMode: "bypassPermissions",
+        },
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /首次在此项目运行 mo-code/);
+  assert.match(result.stdout, /allow: run_shell\(echo trusted\)/);
+  assert.match(result.stdout, /defaultMode: bypassPermissions/);
+  assert.match(result.stdout, /权限模式: bypassPermissions/);
+  assert.deepEqual(result.trust, {
+    acceptedRoots: [result.canonicalCwd],
+  });
+});
+
+test("未信任项目可受限继续且项目 defaultMode 不会影响 Agent", async () => {
+  const result = await captureCliRequest(
+    [],
+    "2\n/status\n/exit\n",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: {
+          allow: ["run_shell(echo trusted)"],
+          defaultMode: "bypassPermissions",
+        },
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /2\. 暂不信任，受限继续/);
+  assert.match(result.stdout, /权限模式: default/);
+  assert.equal(result.trust, undefined);
+});
+
+test("项目信任提示中按 Ctrl+C 会直接退出", async () => {
+  const result = await captureCliRequest([], "", {
+    isolatedProject: true,
+    projectTrusted: false,
+    async drive({ child, getStdout }) {
+      await waitUntil(() => getStdout().includes("请选择 [1-2]: "));
+      child.kill("SIGINT");
+    },
+  });
+
+  assert.equal(result.status, 130);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 0);
+  assert.equal(result.trust, undefined);
+});
+
+test("未信任项目的非法 allow 规则在写入信任记录前终止启动", async () => {
+  const result = await captureCliRequest(
+    [],
+    "1\n/exit\n",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: { allow: ["missing_tool"] },
+      },
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stderr, /unknown tool "missing_tool"/);
+  assert.doesNotMatch(result.stdout, /首次在此项目运行 mo-code/);
+  assert.equal(result.trust, undefined);
+});
+
+test("项目信任持久化失败时不构造 Agent", async () => {
+  const result = await captureCliRequest([], "", {
+    invalidHome: true,
+    invalidHomeTrustChoice: "1",
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 0);
+  assert.match(result.stderr, /Cannot persist project trust/);
+});
+
+test("非交互模式不询问信任，只在实际过滤项目权限配置时警告", async () => {
+  const restricted = await captureCliRequest(
+    ["--print", "--dangerously-skip-permissions", "hello"],
+    "",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: {
+          allow: ["run_shell(echo trusted)"],
+          defaultMode: "acceptEdits",
+        },
+      },
+    },
+  );
+
+  assert.equal(restricted.status, 0, restricted.stderr);
+  assert.equal(restricted.stdout, "done\n");
+  assert.equal(
+    restricted.stderr,
+    "Warning: 当前项目尚未信任，已忽略 2 项权限扩张配置\n",
+  );
+  assert.equal(restricted.trust, undefined);
+
+  const noCapabilities = await captureCliRequest(
+    ["--print", "hello"],
+    "",
+    { isolatedProject: true, projectTrusted: false },
+  );
+  assert.equal(noCapabilities.status, 0, noCapabilities.stderr);
+  assert.equal(noCapabilities.stderr, "");
+  assert.equal(noCapabilities.stdout, "done\n");
+});
+
+test("CLI 加载权限规则并应用到真实工具调用", async () => {
+  const result = await captureCliRequest(
+    ["--print", "read package.json"],
+    "",
+    {
+      userSettings: {
+        permissions: { deny: ["read_file(package.json)"] },
+      },
+      responses: [
+        {
+          content: [{
+            type: "tool_use",
+            id: "toolu_settings_denied_0",
+            name: "read_file",
+            input: { file_path: "package.json" },
+          }],
+          stop_reason: "tool_use",
+        },
+        { content: [] },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.requests.length, 2);
+  const toolResult = result.requests[1].messages.at(-1).content[0];
+  assert.equal(toolResult.is_error, true);
+  assert.match(toolResult.content, /Permission denied: Permission rule/);
+  assert.match(toolResult.content, /read_file\(package\.json\)/);
+  assert.match(toolResult.content, /\.mo-code\/settings\.json/);
+});
+
+test("交互模式使用同一个终端输入完成工具权限确认", async () => {
+  const outputPath = join(
+    projectRoot,
+    `.mo-code-permission-prompt-${process.pid}-${Date.now()}.txt`,
+  );
+  const command = `touch ${outputPath}`;
+  try {
+    const result = await captureCliRequest(
+      [],
+      "run command\n1\n/exit\n",
+      {
+        responses: [
+          {
+            content: [{
+              type: "tool_use",
+              id: "toolu_permission_prompt_0",
+              name: "run_shell",
+              input: { command },
+            }],
+            stop_reason: "tool_use",
+          },
+          { content: [{ type: "text", text: "done" }] },
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.requests.length, 2);
+    assert.match(result.stdout, /权限确认/);
+    assert.match(result.stdout, /工具: run_shell/);
+    assert.match(result.stdout, new RegExp(`目标: ${escapeRegExp(command)}`));
+    assert.match(result.stdout, /1\. 仅允许本次/);
+    assert.match(result.stdout, /2\. 在当前项目中不再询问此命令/);
+    assert.match(result.stdout, /3\. 拒绝并告诉 Agent 如何调整/);
+
+    const toolResult = result.requests[1].messages.at(-1).content[0];
+    assert.equal(toolResult.type, "tool_result");
+    assert.equal(toolResult.is_error, undefined);
+  } finally {
+    rmSync(outputPath, { force: true });
+  }
+});
+
+test("--print 遇到 ask 时不读取输入并把非交互拒绝返回模型", async () => {
+  const result = await captureCliRequest(
+    ["--print", "run command"],
+    "1\n",
+    {
+      responses: [
+        {
+          content: [{
+            type: "tool_use",
+            id: "toolu_print_permission_0",
+            name: "run_shell",
+            input: { command: "true > /dev/null" },
+          }],
+          stop_reason: "tool_use",
+        },
+        { content: [{ type: "text", text: "done" }] },
+      ],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 2);
+  assert.doesNotMatch(result.stdout, /权限确认/);
+
+  const toolResult = result.requests[1].messages.at(-1).content[0];
+  assert.equal(toolResult.is_error, true);
+  assert.match(toolResult.content, /--print mode is non-interactive/);
+});
+
+test("权限配置错误时 CLI 失败关闭且不调用模型", async () => {
+  for (const options of [
+    { userSettingsRaw: "{invalid-json" },
+    {
+      userSettings: {
+        permissions: { deny: ["missing_tool"] },
+      },
+    },
+  ]) {
+    const result = await captureCliRequest(
+      ["--print", "hello"],
+      "",
+      options,
+    );
+
+    assert.equal(result.status, 1);
+    assert.equal(result.requests.length, 0);
+    assert.match(result.stderr, /^Error: Invalid permission (settings|rule)/);
+    assert.match(result.stderr, /\.mo-code\/settings\.json/);
+  }
 });
 
 test("/status 显示当前进程累计的 Prompt Cache usage", async () => {
@@ -429,6 +815,49 @@ test("--resume 和 -r 恢复指定会话并继续写入原文件", async () => {
       result.sessions[0].records.map(({ type }) => type),
       ["session", "turn", "turn"],
     );
+  }
+});
+
+test("--resume 把会话授权恢复到 Agent 并随新 turn 继续保存", async () => {
+  const outputPath = join(
+    projectRoot,
+    `.mo-code-resumed-grant-${process.pid}-${Date.now()}.txt`,
+  );
+  const initialSession = createStoredSession({ permissionGrants: ["edit:*"] });
+  try {
+    const result = await captureCliRequest(
+      ["--print", "--resume", sessionId, "write file"],
+      "",
+      {
+        initialSession,
+        responses: [
+          {
+            content: [{
+              type: "tool_use",
+              id: "toolu_resumed_grant_0",
+              name: "write_file",
+              input: { file_path: outputPath, content: "saved" },
+            }],
+            stop_reason: "tool_use",
+          },
+          { content: [{ type: "text", text: "done" }] },
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.equal(result.requests.length, 2);
+    assert.doesNotMatch(result.stdout, /权限确认/);
+    const toolResult = result.requests[1].messages.at(-1).content[0];
+    assert.equal(toolResult.is_error, undefined, toolResult.content);
+    assert.equal(readFileSync(outputPath, "utf-8"), "saved");
+    assert.deepEqual(
+      result.sessions[0].records.at(-1).permissionGrants,
+      ["edit:*"],
+    );
+  } finally {
+    rmSync(outputPath, { force: true });
   }
 });
 
@@ -791,10 +1220,42 @@ test("会话保存失败时警告但不中断后续对话", async () => {
 async function captureCliRequest(args, stdin = "", options = {}) {
   const testRoot = mkdtempSync(join(tmpdir(), "mo-code-cli-"));
   const home = options.invalidHome ? join(testRoot, "home-file") : join(testRoot, "home");
+  const cwd = options.isolatedProject ? join(testRoot, "project") : projectRoot;
+  if (options.isolatedProject) {
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+  }
   if (options.invalidHome) {
     writeFileSync(home, "not a directory");
   } else {
     mkdirSync(home);
+  }
+  const canonicalCwd = realpathSync(cwd);
+  const trustPath = join(home, ".mo-code", "trust.json");
+  if (!options.invalidHome && options.projectTrusted !== false) {
+    mkdirSync(dirname(trustPath), { recursive: true });
+    writeFileSync(
+      trustPath,
+      `${JSON.stringify({ acceptedRoots: [canonicalCwd] }, null, 2)}\n`,
+      "utf-8",
+    );
+  }
+  if (options.projectSettings !== undefined) {
+    const settingsPath = join(cwd, ".mo-code", "settings.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(options.projectSettings), "utf-8");
+  }
+  if (
+    options.userSettings !== undefined
+    || options.userSettingsRaw !== undefined
+  ) {
+    const settingsPath = join(home, ".mo-code", "settings.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      options.userSettingsRaw
+        ?? JSON.stringify(options.userSettings),
+      "utf-8",
+    );
   }
   const sessionDir = join(home, ".mo-code", "sessions");
   if (options.initialSession !== undefined) {
@@ -824,7 +1285,7 @@ async function captureCliRequest(args, stdin = "", options = {}) {
       process.execPath,
       ["--no-warnings", "--experimental-strip-types", cliPath, ...args],
       {
-        cwd: projectRoot,
+        cwd,
         env: {
           ...process.env,
           ANTHROPIC_API_KEY: "mock",
@@ -860,7 +1321,11 @@ async function captureCliRequest(args, stdin = "", options = {}) {
       });
       if (!child.stdin.destroyed) child.stdin.end();
     } else {
-      child.stdin.end(stdin);
+      child.stdin.end(
+        options.invalidHome
+          ? `${options.invalidHomeTrustChoice ?? "2"}\n${stdin}`
+          : stdin,
+      );
     }
 
     const status = await statusPromise;
@@ -879,7 +1344,19 @@ async function captureCliRequest(args, stdin = "", options = {}) {
         })
       : [];
 
-    return { status, stdout, stderr, requests: mock.requests, sessions };
+    const trust = existsSync(trustPath)
+      ? JSON.parse(readFileSync(trustPath, "utf-8"))
+      : undefined;
+    return {
+      status,
+      stdout,
+      stderr,
+      requests: mock.requests,
+      sessions,
+      trust,
+      cwd,
+      canonicalCwd,
+    };
   } finally {
     await mock.close();
     rmSync(testRoot, { recursive: true, force: true });
@@ -916,12 +1393,16 @@ function serializeStoredSession(session) {
   };
   const records = [header];
   if (session.messages.length > 0) {
-    records.push({
+    const turn = {
       type: "turn",
       timestamp: session.updatedAt,
       model: session.model,
       messages: session.messages,
-    });
+    };
+    if (session.permissionGrants !== undefined) {
+      turn.permissionGrants = session.permissionGrants;
+    }
+    records.push(turn);
   }
   return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
 }

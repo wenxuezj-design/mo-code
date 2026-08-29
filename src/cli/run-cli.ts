@@ -1,0 +1,281 @@
+import { readFileSync, realpathSync } from "node:fs";
+
+import { Agent } from "../agent/index.ts";
+import {
+  loadPermissionSettings,
+  ProjectTrustStore,
+  resolveProjectTrustRoot,
+  validatePermissionRules,
+  type LoadedPermissionSettings,
+} from "../permissions/index.ts";
+import { toolDefinitions } from "../tools/index.ts";
+import { HELP_TEXT, parseArgs, type ParsedArgs } from "./args.ts";
+import { runPrintTurn, runRepl } from "./conversation.ts";
+import {
+  nonInteractivePermissionPrompter,
+  TerminalPermissionPrompter,
+} from "./permission-prompter.ts";
+import {
+  ProjectTrustPromptInterruptedError,
+  promptForProjectTrust,
+} from "./project-trust-prompt.ts";
+import {
+  confirmSessionDeletion,
+  reportSkippedSessionFiles,
+  selectSession,
+  selectSessionToDelete,
+} from "./session-ui.ts";
+import { ReadlineTerminalInput } from "./terminal-input.ts";
+import {
+  createSession,
+  deleteSession,
+  findLatestSession,
+  listSessions,
+  loadSession,
+  type SessionData,
+} from "../session.ts";
+
+export { HELP_TEXT, parseArgs } from "./args.ts";
+
+function getVersion(): string {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../../package.json", import.meta.url), "utf-8"),
+  ) as { version?: unknown };
+
+  if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
+    throw new Error("package.json 中缺少有效的 version");
+  }
+
+  return packageJson.version;
+}
+
+function reportCliError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`Error: ${message}\n`);
+  process.exitCode = 1;
+}
+
+function reportAgentSetupError(
+  error: unknown,
+  terminal: ReadlineTerminalInput | undefined,
+): void {
+  terminal?.close();
+  if (error instanceof ProjectTrustPromptInterruptedError) {
+    process.exitCode = 130;
+    return;
+  }
+  reportCliError(error);
+}
+
+export async function runCli(args = process.argv.slice(2)): Promise<void> {
+  let parsed: ParsedArgs;
+  try {
+    parsed = parseArgs(args);
+  } catch (error) {
+    reportCliError(error);
+    return;
+  }
+
+  if (parsed.help) {
+    process.stdout.write(HELP_TEXT);
+    return;
+  }
+
+  if (parsed.version) {
+    process.stdout.write(`${getVersion()} (mo-code)\n`);
+    return;
+  }
+
+  if (parsed.deleteSession) {
+    try {
+      let sessionId: string;
+      if (parsed.deleteSessionId !== undefined) {
+        sessionId = parsed.deleteSessionId;
+        if (!await confirmSessionDeletion(sessionId)) return;
+      } else {
+        const result = listSessions(process.cwd());
+        reportSkippedSessionFiles(result.skippedFiles);
+        if (result.sessions.length === 0) {
+          throw new Error("当前目录没有可删除的会话");
+        }
+        const selectedSession = await selectSessionToDelete(result.sessions);
+        if (!selectedSession) return;
+        sessionId = selectedSession.id;
+      }
+
+      deleteSession(sessionId);
+      process.stdout.write(`已删除会话: ${sessionId}\n`);
+    } catch (error) {
+      reportCliError(error);
+    }
+    return;
+  }
+
+  let agent: Agent;
+  let session: SessionData;
+  let terminal: ReadlineTerminalInput | undefined;
+
+  const getTerminal = () => {
+    terminal ??= new ReadlineTerminalInput();
+    return terminal;
+  };
+
+  const createPermissionPrompter = () => {
+    if (parsed.print) return nonInteractivePermissionPrompter;
+
+    return new TerminalPermissionPrompter(getTerminal());
+  };
+
+  const loadEffectivePermissionSettings = async () => {
+    return preparePermissionSettings({
+      cwd: process.cwd(),
+      interactive: !parsed.print,
+      getTerminal,
+    });
+  };
+
+  if (parsed.resume || parsed.continueSession) {
+    try {
+      if (parsed.resumeId !== undefined) {
+        session = loadSession(parsed.resumeId);
+      } else if (parsed.resume) {
+        const result = listSessions(process.cwd());
+        reportSkippedSessionFiles(result.skippedFiles);
+        if (result.sessions.length === 0) {
+          throw new Error("当前目录没有可恢复的会话");
+        }
+        const selectedSession = await selectSession(result.sessions);
+        if (!selectedSession) return;
+        session = selectedSession;
+      } else {
+        const result = findLatestSession(process.cwd());
+        reportSkippedSessionFiles(result.skippedFiles);
+        if (!result.session) {
+          throw new Error("当前目录没有可恢复的会话");
+        }
+        session = result.session;
+      }
+    } catch (error) {
+      reportCliError(error);
+      return;
+    }
+
+    // 当前版本要求回到原工作目录，避免旧会话上下文操作到其他项目。
+    // Claude Code 对同仓库 worktree 有更灵活的处理，后续再扩展。
+    if (session.cwd !== process.cwd()) {
+      process.stderr.write(
+        `Error: 会话 ${session.id} 属于另一个工作目录\n`
+        + `  会话目录: ${session.cwd}\n`
+        + `  当前目录: ${process.cwd()}\n`
+        + `请切换到会话目录后重新运行 mo-code --resume ${session.id}\n`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const permissionSettings = await loadEffectivePermissionSettings();
+      agent = new Agent({
+        model: parsed.model ?? session.model,
+        thinking: parsed.thinking,
+        permissionMode: parsed.permissionMode,
+        allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
+        permissionPrompter: createPermissionPrompter(),
+        permissionSettings,
+        permissionSessionGrants: session.permissionGrants,
+      });
+      agent.restoreMessages(session.messages);
+      session.model = agent.getModel();
+    } catch (error) {
+      reportAgentSetupError(error, terminal);
+      return;
+    }
+  } else {
+    try {
+      const permissionSettings = await loadEffectivePermissionSettings();
+      agent = new Agent({
+        model: parsed.model,
+        thinking: parsed.thinking,
+        permissionMode: parsed.permissionMode,
+        allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
+        permissionPrompter: createPermissionPrompter(),
+        permissionSettings,
+      });
+      session = createSession(process.cwd(), agent.getModel());
+    } catch (error) {
+      reportAgentSetupError(error, terminal);
+      return;
+    }
+  }
+
+  try {
+    if (parsed.print) {
+      if (parsed.prompt) await runPrintTurn(agent, session, parsed.prompt);
+      return;
+    }
+
+    if (!terminal) throw new Error("交互模式缺少终端输入器");
+    await runRepl(agent, session, terminal, parsed.prompt);
+  } finally {
+    terminal?.close();
+  }
+}
+
+type PreparePermissionSettingsOptions = {
+  cwd: string;
+  interactive: boolean;
+  getTerminal: () => ReadlineTerminalInput;
+};
+
+async function preparePermissionSettings(
+  options: PreparePermissionSettingsOptions,
+): Promise<LoadedPermissionSettings> {
+  const trustRoot = resolveProjectTrustRoot({ cwd: options.cwd });
+  const trustStore = new ProjectTrustStore();
+  let projectTrusted = trustStore.isTrusted(trustRoot);
+  const canonicalCwd = realpathSync(options.cwd);
+  let settings = loadPermissionSettings({
+    cwd: canonicalCwd,
+    trustRoot: trustRoot.path,
+    projectTrusted,
+  });
+  validateLoadedPermissionRules(settings);
+
+  if (!projectTrusted && options.interactive) {
+    const accepted = await promptForProjectTrust(options.getTerminal(), {
+      trustRoot: trustRoot.path,
+      allowRules: settings.trustGated?.rules.map((rule) => rule.raw) ?? [],
+      defaultMode: settings.trustGated?.defaultMode,
+    });
+    if (accepted) {
+      const trustedSettings = loadPermissionSettings({
+        cwd: canonicalCwd,
+        trustRoot: trustRoot.path,
+        projectTrusted: true,
+      });
+      validateLoadedPermissionRules(trustedSettings);
+      trustStore.accept(trustRoot);
+      projectTrusted = true;
+      settings = trustedSettings;
+    }
+  }
+
+  if (!projectTrusted && !options.interactive && settings.trustGated) {
+    const ignoredCount = settings.trustGated.rules.length
+      + (settings.trustGated.defaultMode === undefined ? 0 : 1);
+    process.stderr.write(
+      `Warning: 当前项目尚未信任，已忽略 ${ignoredCount} 项权限扩张配置\n`,
+    );
+  }
+
+  return settings;
+}
+
+function validateLoadedPermissionRules(
+  settings: LoadedPermissionSettings,
+): void {
+  validatePermissionRules([
+    ...settings.rules,
+    ...(settings.trustGated?.rules ?? []),
+  ], toolDefinitions.map((tool) => tool.name));
+}

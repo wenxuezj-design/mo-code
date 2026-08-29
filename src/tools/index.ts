@@ -1,10 +1,11 @@
 export { executeTool, isToolConcurrencySafe } from "./execute-tool.ts";
-export { toolDefinitions, tools } from "./registry.ts";
+export { toolDefinitions } from "./registry.ts";
 
 export type {
   Tool,
   ToolContext,
   ToolDef,
+  ToolExecutionResult,
   ToolHandler,
   ToolValidator,
   ValidationResult,

@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -83,6 +84,88 @@ test("deleteSession 对无效 ID 和不存在的会话给出明确错误", () =>
   assert.throws(
     () => sessionModule.deleteSession(latestSessionId),
     { message: `找不到会话: ${latestSessionId}` },
+  );
+});
+
+test("createSession 初始化空的权限授权", () => {
+  const session = sessionModule.createSession(projectCwd, "mock");
+
+  assert.deepEqual(session.permissionGrants, []);
+});
+
+test("appendSessionTurn 保存权限授权快照并可恢复", () => {
+  const session = sessionModule.createSession(projectCwd, "mock");
+  session.permissionGrants.push("edit", "run_shell(pnpm test)");
+
+  sessionModule.appendSessionTurn(session, [
+    { role: "user", content: "run tests" },
+  ]);
+  session.permissionGrants.push("web_fetch(https://example.com/*)");
+
+  const loaded = sessionModule.loadSession(session.id);
+  assert.deepEqual(loaded.permissionGrants, ["edit", "run_shell(pnpm test)"]);
+
+  const records = readFileSync(
+    join(sessionDir, `${session.id}.jsonl`),
+    "utf-8",
+  ).trimEnd().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(records.at(-1).permissionGrants, [
+    "edit",
+    "run_shell(pnpm test)",
+  ]);
+});
+
+test("loadSession 使用最后一个 turn 的权限授权快照", () => {
+  const records = [
+    {
+      type: "session",
+      version: 1,
+      id: latestSessionId,
+      cwd: projectCwd,
+      model: "mock",
+      createdAt: "2026-07-14T07:00:00.000Z",
+    },
+    {
+      type: "turn",
+      timestamp: "2026-07-14T08:00:00.000Z",
+      model: "mock",
+      messages: [{ role: "user", content: "first" }],
+      permissionGrants: ["edit"],
+    },
+    {
+      type: "turn",
+      timestamp: "2026-07-14T09:00:00.000Z",
+      model: "mock",
+      messages: [{ role: "user", content: "second" }],
+      permissionGrants: ["run_shell(pnpm test)"],
+    },
+  ];
+  mkdirSync(sessionDir, { recursive: true });
+  writeFileSync(
+    join(sessionDir, `${latestSessionId}.jsonl`),
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+  );
+
+  const loaded = sessionModule.loadSession(latestSessionId);
+  assert.deepEqual(loaded.permissionGrants, ["run_shell(pnpm test)"]);
+
+  loaded.permissionGrants.push("web_fetch(https://example.com/*)");
+  assert.deepEqual(
+    sessionModule.loadSession(latestSessionId).permissionGrants,
+    ["run_shell(pnpm test)"],
+  );
+});
+
+test("loadSession 将旧记录中缺少的权限授权快照视为空数组", () => {
+  writeSession({
+    id: latestSessionId,
+    cwd: projectCwd,
+    updatedAt: "2026-07-14T10:00:00.000Z",
+  });
+
+  assert.deepEqual(
+    sessionModule.loadSession(latestSessionId).permissionGrants,
+    [],
   );
 });
 

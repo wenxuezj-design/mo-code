@@ -1,64 +1,355 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { PermissionGate } from "../../src/permissions/index.ts";
 import {
   executeTool,
   isToolConcurrencySafe,
 } from "../../src/tools/execute-tool.ts";
-import { toolDefinitions, tools } from "../../src/tools/index.ts";
+import { toolDefinitions } from "../../src/tools/index.ts";
+import { tools } from "../../src/tools/registry.ts";
 
-test("工具定义由工具对象派生且不暴露 execute", () => {
-  const toolNames = tools.map((tool) => tool.name);
-  const definitionNames = toolDefinitions.map((tool) => tool.name);
-
-  assert.deepEqual(definitionNames, toolNames);
-  assert.ok(tools.every((tool) => typeof tool.execute === "function"));
+test("公共工具定义不暴露 execute", () => {
+  assert.deepEqual(
+    toolDefinitions.map((tool) => tool.name),
+    [
+      "read_file",
+      "write_file",
+      "edit_file",
+      "list_files",
+      "grep_search",
+      "run_shell",
+      "web_fetch",
+    ],
+  );
   assert.ok(toolDefinitions.every((tool) => {
     return Object.keys(tool).sort().join(",") === "description,input_schema,name";
   }));
 });
 
-test("executeTool 在执行工具前调用工具自己的 validateInput", async () => {
-  const tool = tools.find((item) => item.name === "read_file");
-  assert.ok(tool);
+test("每个工具通过统一描述声明自己的权限类别", () => {
+  const context = createContext();
+  assert.deepEqual(
+    Object.fromEntries(tools.map((tool) => [
+      tool.name,
+      tool.getPermissionDescriptor({}, context).permissionKind,
+    ])),
+    {
+      read_file: "read",
+      write_file: "edit",
+      edit_file: "edit",
+      list_files: "read",
+      grep_search: "read",
+      run_shell: "shell",
+      web_fetch: "network",
+    },
+  );
+});
 
-  const originalValidateInput = tool.validateInput;
-  const originalExecute = tool.execute;
-  let executed = false;
+test("executeTool 把工具权限类别传给 PermissionGate", async () => {
+  let receivedRequest;
+  const permissionGate = new PermissionGate({
+    policy: {
+      evaluate(request) {
+        receivedRequest = request;
+        return { behavior: "allow" };
+      },
+    },
+  });
 
-  try {
-    tool.validateInput = () => ({ ok: false, message: "blocked by tool" });
-    tool.execute = () => {
-      executed = true;
-      return "executed";
-    };
+  await executeTool("list_files", { pattern: "no-match-*" }, createContext({
+    permissionGate,
+  }));
 
-    const result = await executeTool("read_file", {});
+  assert.equal(receivedRequest.toolName, "list_files");
+  assert.equal(receivedRequest.permissionKind, "read");
+  assert.equal(receivedRequest.permissionTarget, resolve(process.cwd(), "no-match-*"));
+});
 
-    assert.equal(result, "blocked by tool");
-    assert.equal(executed, false);
-  } finally {
-    if (originalValidateInput) tool.validateInput = originalValidateInput;
-    else delete tool.validateInput;
-    tool.execute = originalExecute;
+test("内置文件工具声明实际文件系统访问目标", () => {
+  const context = createContext({ cwd: resolve("workspace") });
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  assert.deepEqual(
+    byName.get("read_file").getPermissionDescriptor(
+      { file_path: "src/app.ts" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "src/app.ts"), operation: "read" }],
+    },
+  );
+  for (const toolName of ["write_file", "edit_file"]) {
+    assert.deepEqual(
+      byName.get(toolName).getPermissionDescriptor(
+        { file_path: "src/app.ts" },
+        context,
+      ).filesystemAccesses,
+      {
+        status: "known",
+        accesses: [{ path: resolve(context.cwd, "src/app.ts"), operation: "write" }],
+      },
+    );
+  }
+  const listDescriptor = byName.get("list_files").getPermissionDescriptor(
+    { path: "src", pattern: "*.ts" },
+    context,
+  );
+  assert.equal(listDescriptor.permissionTarget, resolve(context.cwd, "src/*.ts"));
+  assert.deepEqual(listDescriptor.filesystemAccesses, {
+    status: "known",
+    accesses: [{ path: resolve(context.cwd, "src"), operation: "read" }],
+  });
+  assert.deepEqual(
+    byName.get("list_files").getPermissionDescriptor(
+      { pattern: "../shared/*.ts" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "../shared"), operation: "read" }],
+    },
+  );
+  const absolutePattern = resolve(context.cwd, "../outside/*.ts");
+  assert.deepEqual(
+    byName.get("list_files").getPermissionDescriptor(
+      { pattern: absolutePattern },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "../outside"), operation: "read" }],
+    },
+  );
+  for (const pattern of [
+    "**/*.ts",
+    "[.][.]/outside/*.txt",
+    "*/secret.txt",
+  ]) {
+    assert.deepEqual(
+      byName.get("list_files").getPermissionDescriptor(
+        { pattern },
+        context,
+      ).filesystemAccesses,
+      { status: "unknown" },
+      pattern,
+    );
+  }
+  assert.deepEqual(
+    byName.get("list_files").getPermissionDescriptor(
+      { pattern: "link/../*.ts" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{
+        path: context.cwd,
+        operation: "read",
+      }],
+    },
+  );
+  assert.deepEqual(
+    byName.get("grep_search").getPermissionDescriptor(
+      { path: "src", pattern: "Agent" },
+      context,
+    ).filesystemAccesses,
+    {
+      status: "known",
+      accesses: [{ path: resolve(context.cwd, "src"), operation: "read" }],
+    },
+  );
+});
+
+test("executeTool 把 Shell 命令语义传给 PermissionGate", async () => {
+  let receivedRequest;
+  const permissionGate = new PermissionGate({
+    policy: {
+      evaluate(request) {
+        receivedRequest = request;
+        return { behavior: "deny", reason: "stop before execution" };
+      },
+    },
+  });
+
+  await executeTool("run_shell", { command: "pwd && git status" }, createContext({
+    permissionGate,
+  }));
+
+  assert.equal(receivedRequest.permissionKind, "shell");
+  assert.equal(receivedRequest.permissionTarget, "pwd && git status");
+  assert.equal(receivedRequest.shellSemantics, "readOnly");
+});
+
+test("工具从各自输入生成权限匹配目标", () => {
+  const context = createContext();
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  assert.equal(
+    byName.get("read_file").getPermissionDescriptor(
+      { file_path: "./src/../package.json" },
+      context,
+    ).permissionTarget,
+    resolve(context.cwd, "package.json"),
+  );
+  assert.equal(
+    byName.get("list_files").getPermissionDescriptor(
+      { path: "src", pattern: "**/*.ts" },
+      context,
+    ).permissionTarget,
+    resolve(context.cwd, "src/**/*.ts"),
+  );
+  assert.equal(
+    byName.get("grep_search").getPermissionDescriptor({}, context).permissionTarget,
+    resolve(context.cwd),
+  );
+  const shellDescriptor = byName.get("run_shell").getPermissionDescriptor(
+    { command: "pnpm test" },
+    context,
+  );
+  assert.equal(shellDescriptor.permissionKind, "shell");
+  assert.equal(shellDescriptor.permissionTarget, "pnpm test");
+  assert.equal(shellDescriptor.shellSemantics, "unknown");
+  assert.deepEqual(shellDescriptor.grant, {
+    scope: "persistent",
+    key: "run_shell:pnpm test",
+    rule: "run_shell(pnpm test)",
+    label: "在当前项目中不再询问此命令",
+  });
+  assert.deepEqual(
+    byName.get("web_fetch").getPermissionDescriptor(
+      { url: "https://example.com/docs" },
+      context,
+    ),
+    {
+      permissionKind: "network",
+      permissionTarget: "https://example.com/docs",
+      grant: {
+        scope: "persistent",
+        key: "web_fetch:https://example.com",
+        rule: "web_fetch(https://example.com/*)",
+        label: "不再询问 https://example.com",
+      },
+    },
+  );
+});
+
+test("编辑工具共享会话授权，读取工具不生成授权建议", () => {
+  const context = createContext();
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  for (const toolName of ["write_file", "edit_file"]) {
+    assert.deepEqual(
+      byName.get(toolName).getPermissionDescriptor(
+        { file_path: "src/app.ts" },
+        context,
+      ).grant,
+      {
+        scope: "session",
+        key: "edit:*",
+        label: "当前会话不再询问文件编辑",
+      },
+    );
+  }
+  for (const toolName of ["read_file", "list_files", "grep_search"]) {
+    assert.equal(
+      byName.get(toolName).getPermissionDescriptor({}, context).grant,
+      undefined,
+    );
   }
 });
 
-test("文件修改工具各自提供 validateInput", () => {
-  const writeFileTool = tools.find((tool) => tool.name === "write_file");
-  const editFileTool = tools.find((tool) => tool.name === "edit_file");
+test("Shell 自动规则转义星号和反斜杠，WebFetch 按规范化 origin 授权", () => {
+  const context = createContext();
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  const command = String.raw`printf C:\temp\*.log`;
 
-  assert.equal(typeof writeFileTool?.validateInput, "function");
-  assert.equal(typeof editFileTool?.validateInput, "function");
+  assert.deepEqual(
+    byName.get("run_shell").getPermissionDescriptor({ command }, context).grant,
+    {
+      scope: "persistent",
+      key: `run_shell:${command}`,
+      rule: String.raw`run_shell(printf C:\\temp\\\*.log)`,
+      label: "在当前项目中不再询问此命令",
+    },
+  );
+  assert.deepEqual(
+    byName.get("web_fetch").getPermissionDescriptor(
+      { url: "HTTPS://EXAMPLE.COM:443" },
+      context,
+    ),
+    {
+      permissionKind: "network",
+      permissionTarget: "https://example.com/",
+      grant: {
+        scope: "persistent",
+        key: "web_fetch:https://example.com",
+        rule: "web_fetch(https://example.com/*)",
+        label: "不再询问 https://example.com",
+      },
+    },
+  );
+  assert.equal(
+    byName.get("run_shell").getPermissionDescriptor(
+      { command: "   " },
+      context,
+    ).grant,
+    undefined,
+  );
+});
+
+test("executeTool 要求显式提供 PermissionGate", async () => {
+  await assert.rejects(
+    executeTool("read_file", {}),
+    /ToolContext\.permissionGate is required/,
+  );
+});
+
+test("executeTool 先检查权限，授权后才校验输入", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mo-code-validation-order-"));
+  let permissionChecks = 0;
+  const permissionGate = new PermissionGate({
+    policy: {
+      evaluate() {
+        permissionChecks++;
+        return { behavior: "deny", reason: "blocked before validation" };
+      },
+    },
+  });
+
+  try {
+    const filePath = join(dir, "existing.txt");
+    writeFileSync(filePath, "old");
+
+    const result = await executeTool("write_file", {
+      file_path: filePath,
+      content: "new",
+    }, createContext({ permissionGate }));
+
+    assert.deepEqual(result, {
+      content: "Permission denied: blocked before validation",
+      isError: true,
+    });
+    assert.equal(permissionChecks, 1);
+    assert.equal(readFileSync(filePath, "utf-8"), "old");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("工具自己声明并发安全性，未声明和未知工具默认不安全", () => {
   for (const name of ["read_file", "list_files", "grep_search", "web_fetch"]) {
-    const tool = tools.find((item) => item.name === name);
-    assert.equal(typeof tool?.isConcurrencySafe, "function");
     assert.equal(isToolConcurrencySafe(name, {}), true);
   }
 
@@ -74,12 +365,17 @@ test("executeTool 截断过长的工具结果并保留头尾", async () => {
     const filePath = join(dir, "large.txt");
     writeFileSync(filePath, `start-${"x".repeat(60_000)}-end`);
 
-    const result = await executeTool("read_file", { file_path: filePath });
+    const result = await executeTool(
+      "read_file",
+      { file_path: filePath },
+      createContext(),
+    );
 
-    assert.ok(result.length <= 50_000);
-    assert.match(result, /^ {3}1 \| start-/);
-    assert.match(result, /\[\.\.\. truncated \d+ chars \.\.\.\]/);
-    assert.match(result, /-end$/);
+    assert.equal(result.isError, false);
+    assert.ok(result.content.length <= 50_000);
+    assert.match(result.content, /^ {3}1 \| start-/);
+    assert.match(result.content, /\[\.\.\. truncated \d+ chars \.\.\.\]/);
+    assert.match(result.content, /-end$/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -93,9 +389,68 @@ test("read_file 成功后记录文件 mtimeMs", async () => {
     const filePath = join(dir, "hello.txt");
     writeFileSync(filePath, "hello");
 
-    await executeTool("read_file", { file_path: filePath }, { readFileState });
+    await executeTool(
+      "read_file",
+      { file_path: "hello.txt" },
+      createContext({ cwd: dir, readFileState }),
+    );
 
     assert.equal(readFileState.get(resolve(filePath)), statSync(filePath).mtimeMs);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("内置文件工具统一以 ToolContext.cwd 解析相对路径", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mo-code-tool-cwd-"));
+  const context = createContext({ cwd: dir });
+
+  try {
+    const filePath = join(dir, "notes", "hello.txt");
+    const writeResult = await executeTool("write_file", {
+      file_path: "notes/hello.txt",
+      content: "hello agent",
+    }, context);
+    assert.deepEqual(writeResult, {
+      content: `Successfully wrote to ${filePath}`,
+      isError: false,
+    });
+    assert.equal(readFileSync(filePath, "utf-8"), "hello agent");
+
+    const readResult = await executeTool(
+      "read_file",
+      { file_path: "notes/hello.txt" },
+      context,
+    );
+    assert.deepEqual(readResult, {
+      content: "   1 | hello agent",
+      isError: false,
+    });
+
+    const editResult = await executeTool("edit_file", {
+      file_path: "notes/hello.txt",
+      old_string: "hello",
+      new_string: "hi",
+    }, context);
+    assert.equal(editResult.isError, false);
+    assert.match(editResult.content, new RegExp(`^Successfully edited ${filePath}`));
+    assert.equal(readFileSync(filePath, "utf-8"), "hi agent");
+
+    const listResult = await executeTool(
+      "list_files",
+      { path: "notes", pattern: "*.txt" },
+      context,
+    );
+    assert.deepEqual(listResult, { content: "hello.txt", isError: false });
+
+    const grepResult = await executeTool("grep_search", {
+      path: "notes",
+      pattern: "agent",
+    }, context);
+    assert.deepEqual(grepResult, {
+      content: `${filePath}:1:hi agent`,
+      isError: false,
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -111,28 +466,12 @@ test("write_file 修改已存在文件前必须先 read_file", async () => {
     const result = await executeTool("write_file", {
       file_path: filePath,
       content: "new",
-    }, { readFileState: new Map() });
+    }, createContext());
 
-    assert.equal(result, "Error: You must read this file before writing. Use read_file first.");
-    assert.equal(readFileSync(filePath, "utf-8"), "old");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("write_file 未传 context 时也不能覆盖未读取的文件", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mo-code-default-write-guard-"));
-
-  try {
-    const filePath = join(dir, "hello.txt");
-    writeFileSync(filePath, "old");
-
-    const result = await executeTool("write_file", {
-      file_path: filePath,
-      content: "new",
+    assert.deepEqual(result, {
+      content: "Error: You must read this file before writing. Use read_file first.",
+      isError: true,
     });
-
-    assert.equal(result, "Error: You must read this file before writing. Use read_file first.");
     assert.equal(readFileSync(filePath, "utf-8"), "old");
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -150,9 +489,12 @@ test("edit_file 修改已存在文件前必须先 read_file", async () => {
       file_path: filePath,
       old_string: "old",
       new_string: "new",
-    }, { readFileState: new Map() });
+    }, createContext());
 
-    assert.equal(result, "Error: You must read this file before editing. Use read_file first.");
+    assert.deepEqual(result, {
+      content: "Error: You must read this file before editing. Use read_file first.",
+      isError: true,
+    });
     assert.equal(readFileSync(filePath, "utf-8"), "hello old");
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -169,9 +511,12 @@ test("write_file 创建新文件时不需要先 read_file", async () => {
     const result = await executeTool("write_file", {
       file_path: filePath,
       content: "new",
-    }, { readFileState });
+    }, createContext({ readFileState }));
 
-    assert.equal(result, `Successfully wrote to ${filePath}`);
+    assert.deepEqual(result, {
+      content: `Successfully wrote to ${filePath}`,
+      isError: false,
+    });
     assert.equal(readFileSync(filePath, "utf-8"), "new");
     assert.equal(readFileState.get(resolve(filePath)), statSync(filePath).mtimeMs);
   } finally {
@@ -182,11 +527,12 @@ test("write_file 创建新文件时不需要先 read_file", async () => {
 test("文件读取后被外部修改时拒绝 write_file", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mo-code-external-write-"));
   const readFileState = new Map();
+  const context = createContext({ readFileState });
 
   try {
     const filePath = join(dir, "hello.txt");
     writeFileSync(filePath, "old");
-    await executeTool("read_file", { file_path: filePath }, { readFileState });
+    await executeTool("read_file", { file_path: filePath }, context);
 
     writeFileSync(filePath, "external");
     const changedTime = new Date(statSync(filePath).mtimeMs + 5000);
@@ -195,11 +541,57 @@ test("文件读取后被外部修改时拒绝 write_file", async () => {
     const result = await executeTool("write_file", {
       file_path: filePath,
       content: "agent",
-    }, { readFileState });
+    }, context);
 
-    assert.equal(result, `Warning: ${filePath} was modified externally since your last read. Please read_file again before writing.`);
+    assert.deepEqual(result, {
+      content: `Warning: ${filePath} was modified externally since your last read. Please read_file again before writing.`,
+      isError: true,
+    });
     assert.equal(readFileSync(filePath, "utf-8"), "external");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("未知工具返回结构化错误", async () => {
+  const result = await executeTool("unknown_tool", {}, createContext());
+
+  assert.deepEqual(result, {
+    content: "Unknown tool: unknown_tool",
+    isError: true,
+  });
+});
+
+test("权限拒绝时不执行工具", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mo-code-permission-deny-"));
+  const permissionGate = new PermissionGate({
+    policy: {
+      evaluate: () => ({ behavior: "deny", reason: "writes are blocked" }),
+    },
+  });
+
+  try {
+    const filePath = join(dir, "blocked.txt");
+    const result = await executeTool("write_file", {
+      file_path: filePath,
+      content: "blocked",
+    }, createContext({ permissionGate }));
+
+    assert.deepEqual(result, {
+      content: "Permission denied: writes are blocked",
+      isError: true,
+    });
+    assert.equal(existsSync(filePath), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function createContext(overrides = {}) {
+  return {
+    cwd: process.cwd(),
+    permissionGate: new PermissionGate(),
+    readFileState: new Map(),
+    ...overrides,
+  };
+}

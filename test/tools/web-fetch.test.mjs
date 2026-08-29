@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { PermissionGate } from "../../src/permissions/index.ts";
 import { executeTool, toolDefinitions } from "../../src/tools/index.ts";
 import { webFetch } from "../../src/tools/web-fetch.ts";
 
@@ -50,6 +51,52 @@ test("web_fetch 返回 HTTP 错误", async () => {
   });
 });
 
+test("web_fetch 跟随有限次数的同 origin 重定向", async () => {
+  await withServer((req, res) => {
+    if (req.url === "/start") {
+      res.writeHead(302, { location: "/final" });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("same origin");
+  }, async (url) => {
+    const result = await webFetch({ url: `${url}/start` });
+
+    assert.equal(result, "same origin");
+  });
+});
+
+test("web_fetch 阻止跨 origin 重定向且不会请求目标站点", async () => {
+  let targetRequests = 0;
+  await withServer((_req, res) => {
+    targetRequests++;
+    res.end("secret");
+  }, async (targetUrl) => {
+    await withServer((_req, res) => {
+      res.writeHead(302, { location: targetUrl });
+      res.end();
+    }, async (sourceUrl) => {
+      const result = await webFetch({ url: sourceUrl });
+
+      assert.match(result, /cross-origin redirect blocked/);
+      assert.match(result, new RegExp(sourceUrl.replaceAll(".", "\\.")));
+      assert.equal(targetRequests, 0);
+    });
+  });
+});
+
+test("web_fetch 与权限描述共同接受大小写不同的 HTTP 协议", async () => {
+  await withServer((_req, res) => {
+    res.end("normalized");
+  }, async (url) => {
+    const uppercaseUrl = url.replace("http://", "HTTP://");
+    const result = await webFetch({ url: uppercaseUrl });
+
+    assert.equal(result, "normalized");
+  });
+});
+
 test("web_fetch 根据 max_length 截断响应", async () => {
   await withServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/plain" });
@@ -68,9 +115,13 @@ test("web_fetch 注册到工具列表并支持 executeTool 分发", async () => 
   }, async (url) => {
     assert.ok(toolDefinitions.some((tool) => tool.name === "web_fetch"));
 
-    const result = await executeTool("web_fetch", { url });
+    const result = await executeTool("web_fetch", { url }, {
+      cwd: process.cwd(),
+      permissionGate: new PermissionGate(),
+      readFileState: new Map(),
+    });
 
-    assert.equal(result, "registered");
+    assert.deepEqual(result, { content: "registered", isError: false });
   });
 });
 
