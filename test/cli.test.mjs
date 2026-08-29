@@ -61,7 +61,7 @@ test("--version 和 -v 显示当前版本后退出", () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, "");
-    assert.equal(result.stdout, "0.6.1 (mo-code)\n");
+    assert.equal(result.stdout, "0.6.2 (mo-code)\n");
   }
 });
 
