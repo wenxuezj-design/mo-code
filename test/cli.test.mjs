@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -296,6 +297,141 @@ test("权限配置设置默认模式，命令行模式仍保持更高优先级",
   );
   assert.equal(overridden.status, 0, overridden.stderr);
   assert.match(overridden.stdout, /权限模式: acceptEdits/);
+});
+
+test("首次进入项目时可接受信任并在 Agent 构造前启用项目权限配置", async () => {
+  const result = await captureCliRequest(
+    [],
+    "1\n/status\n/exit\n",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: {
+          allow: ["run_shell(echo trusted)"],
+          defaultMode: "bypassPermissions",
+        },
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /首次在此项目运行 mo-code/);
+  assert.match(result.stdout, /allow: run_shell\(echo trusted\)/);
+  assert.match(result.stdout, /defaultMode: bypassPermissions/);
+  assert.match(result.stdout, /权限模式: bypassPermissions/);
+  assert.deepEqual(result.trust, {
+    acceptedRoots: [result.canonicalCwd],
+  });
+});
+
+test("未信任项目可受限继续且项目 defaultMode 不会影响 Agent", async () => {
+  const result = await captureCliRequest(
+    [],
+    "2\n/status\n/exit\n",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: {
+          allow: ["run_shell(echo trusted)"],
+          defaultMode: "bypassPermissions",
+        },
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stdout, /2\. 暂不信任，受限继续/);
+  assert.match(result.stdout, /权限模式: default/);
+  assert.equal(result.trust, undefined);
+});
+
+test("项目信任提示中按 Ctrl+C 会直接退出", async () => {
+  const result = await captureCliRequest([], "", {
+    isolatedProject: true,
+    projectTrusted: false,
+    async drive({ child, getStdout }) {
+      await waitUntil(() => getStdout().includes("请选择 [1-2]: "));
+      child.kill("SIGINT");
+    },
+  });
+
+  assert.equal(result.status, 130);
+  assert.equal(result.stderr, "");
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 0);
+  assert.equal(result.trust, undefined);
+});
+
+test("未信任项目的非法 allow 规则在写入信任记录前终止启动", async () => {
+  const result = await captureCliRequest(
+    [],
+    "1\n/exit\n",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: { allow: ["missing_tool"] },
+      },
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.match(result.stderr, /unknown tool "missing_tool"/);
+  assert.doesNotMatch(result.stdout, /首次在此项目运行 mo-code/);
+  assert.equal(result.trust, undefined);
+});
+
+test("项目信任持久化失败时不构造 Agent", async () => {
+  const result = await captureCliRequest([], "", {
+    invalidHome: true,
+    invalidHomeTrustChoice: "1",
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.sessions.length, 0);
+  assert.match(result.stderr, /Cannot persist project trust/);
+});
+
+test("非交互模式不询问信任，只在实际过滤项目权限配置时警告", async () => {
+  const restricted = await captureCliRequest(
+    ["--print", "--dangerously-skip-permissions", "hello"],
+    "",
+    {
+      isolatedProject: true,
+      projectTrusted: false,
+      projectSettings: {
+        permissions: {
+          allow: ["run_shell(echo trusted)"],
+          defaultMode: "acceptEdits",
+        },
+      },
+    },
+  );
+
+  assert.equal(restricted.status, 0, restricted.stderr);
+  assert.equal(restricted.stdout, "done\n");
+  assert.equal(
+    restricted.stderr,
+    "Warning: 当前项目尚未信任，已忽略 2 项权限扩张配置\n",
+  );
+  assert.equal(restricted.trust, undefined);
+
+  const noCapabilities = await captureCliRequest(
+    ["--print", "hello"],
+    "",
+    { isolatedProject: true, projectTrusted: false },
+  );
+  assert.equal(noCapabilities.status, 0, noCapabilities.stderr);
+  assert.equal(noCapabilities.stderr, "");
+  assert.equal(noCapabilities.stdout, "done\n");
 });
 
 test("CLI 加载权限规则并应用到真实工具调用", async () => {
@@ -1084,10 +1220,29 @@ test("会话保存失败时警告但不中断后续对话", async () => {
 async function captureCliRequest(args, stdin = "", options = {}) {
   const testRoot = mkdtempSync(join(tmpdir(), "mo-code-cli-"));
   const home = options.invalidHome ? join(testRoot, "home-file") : join(testRoot, "home");
+  const cwd = options.isolatedProject ? join(testRoot, "project") : projectRoot;
+  if (options.isolatedProject) {
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+  }
   if (options.invalidHome) {
     writeFileSync(home, "not a directory");
   } else {
     mkdirSync(home);
+  }
+  const canonicalCwd = realpathSync(cwd);
+  const trustPath = join(home, ".mo-code", "trust.json");
+  if (!options.invalidHome && options.projectTrusted !== false) {
+    mkdirSync(dirname(trustPath), { recursive: true });
+    writeFileSync(
+      trustPath,
+      `${JSON.stringify({ acceptedRoots: [canonicalCwd] }, null, 2)}\n`,
+      "utf-8",
+    );
+  }
+  if (options.projectSettings !== undefined) {
+    const settingsPath = join(cwd, ".mo-code", "settings.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(options.projectSettings), "utf-8");
   }
   if (
     options.userSettings !== undefined
@@ -1130,7 +1285,7 @@ async function captureCliRequest(args, stdin = "", options = {}) {
       process.execPath,
       ["--no-warnings", "--experimental-strip-types", cliPath, ...args],
       {
-        cwd: projectRoot,
+        cwd,
         env: {
           ...process.env,
           ANTHROPIC_API_KEY: "mock",
@@ -1166,7 +1321,11 @@ async function captureCliRequest(args, stdin = "", options = {}) {
       });
       if (!child.stdin.destroyed) child.stdin.end();
     } else {
-      child.stdin.end(stdin);
+      child.stdin.end(
+        options.invalidHome
+          ? `${options.invalidHomeTrustChoice ?? "2"}\n${stdin}`
+          : stdin,
+      );
     }
 
     const status = await statusPromise;
@@ -1185,7 +1344,19 @@ async function captureCliRequest(args, stdin = "", options = {}) {
         })
       : [];
 
-    return { status, stdout, stderr, requests: mock.requests, sessions };
+    const trust = existsSync(trustPath)
+      ? JSON.parse(readFileSync(trustPath, "utf-8"))
+      : undefined;
+    return {
+      status,
+      stdout,
+      stderr,
+      requests: mock.requests,
+      sessions,
+      trust,
+      cwd,
+      canonicalCwd,
+    };
   } finally {
     await mock.close();
     rmSync(testRoot, { recursive: true, force: true });

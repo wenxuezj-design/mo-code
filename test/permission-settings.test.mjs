@@ -118,6 +118,165 @@ test("按 user、project、local 合并规则，后层默认模式覆盖前层",
   });
 });
 
+test("未信任项目只过滤项目侧 allow 和 defaultMode", () => {
+  const root = createTemporaryDirectory();
+  const homeDir = join(root, "home");
+  const projectDir = join(root, "workspace", "project");
+  const cwd = join(projectDir, "src");
+  const userPath = join(homeDir, ".mo-code", "settings.json");
+  const projectPath = join(projectDir, ".mo-code", "settings.json");
+  const localPath = join(projectDir, ".mo-code", "settings.local.json");
+
+  writeJson(userPath, {
+    permissions: {
+      allow: ["user_allow"],
+      ask: ["user_ask"],
+      deny: ["user_deny"],
+      defaultMode: "acceptEdits",
+    },
+  });
+  writeJson(projectPath, {
+    permissions: {
+      allow: ["project_allow"],
+      ask: ["project_ask"],
+      deny: ["project_deny"],
+      defaultMode: "plan",
+    },
+  });
+  writeJson(localPath, {
+    permissions: {
+      allow: ["local_allow"],
+      ask: ["local_ask"],
+      deny: ["local_deny"],
+      defaultMode: "dontAsk",
+    },
+  });
+
+  assert.deepEqual(loadPermissionSettings({
+    cwd,
+    homeDir,
+    trustRoot: projectDir,
+    projectTrusted: false,
+  }), {
+    rules: [
+      rule("allow", "user_allow", "user", userPath),
+      rule("ask", "user_ask", "user", userPath),
+      rule("deny", "user_deny", "user", userPath),
+      rule("ask", "project_ask", "project", projectPath),
+      rule("deny", "project_deny", "project", projectPath),
+      rule("ask", "local_ask", "local", localPath),
+      rule("deny", "local_deny", "local", localPath),
+    ],
+    defaultMode: "acceptEdits",
+    defaultModeSource: { sourceScope: "user", sourcePath: userPath },
+    trustGated: {
+      rules: [
+        rule("allow", "project_allow", "project", projectPath),
+        rule("allow", "local_allow", "local", localPath),
+      ],
+      defaultMode: "dontAsk",
+      defaultModeSource: { sourceScope: "local", sourcePath: localPath },
+    },
+  });
+});
+
+test("已信任项目全量采用项目和本地项目配置", () => {
+  const root = createTemporaryDirectory();
+  const homeDir = join(root, "home");
+  const projectDir = join(root, "project");
+  const projectPath = join(projectDir, ".mo-code", "settings.json");
+  const localPath = join(projectDir, ".mo-code", "settings.local.json");
+
+  writeJson(projectPath, {
+    permissions: {
+      allow: ["project_allow"],
+      ask: ["project_ask"],
+      defaultMode: "plan",
+    },
+  });
+  writeJson(localPath, {
+    permissions: {
+      allow: ["local_allow"],
+      deny: ["local_deny"],
+      defaultMode: "acceptEdits",
+    },
+  });
+
+  assert.deepEqual(loadPermissionSettings({
+    cwd: join(projectDir, "src"),
+    homeDir,
+    trustRoot: projectDir,
+    projectTrusted: true,
+  }), {
+    rules: [
+      rule("allow", "project_allow", "project", projectPath),
+      rule("ask", "project_ask", "project", projectPath),
+      rule("allow", "local_allow", "local", localPath),
+      rule("deny", "local_deny", "local", localPath),
+    ],
+    defaultMode: "acceptEdits",
+    defaultModeSource: { sourceScope: "local", sourcePath: localPath },
+  });
+});
+
+test("未信任项目没有权限扩张配置时不返回门控摘要", () => {
+  const root = createTemporaryDirectory();
+  const homeDir = join(root, "home");
+  const projectDir = join(root, "project");
+  const projectPath = join(projectDir, ".mo-code", "settings.json");
+  writeJson(projectPath, {
+    permissions: { ask: ["project_ask"], deny: ["project_deny"] },
+  });
+
+  assert.deepEqual(loadPermissionSettings({
+    cwd: projectDir,
+    homeDir,
+    trustRoot: projectDir,
+    projectTrusted: false,
+  }), {
+    rules: [
+      rule("ask", "project_ask", "project", projectPath),
+      rule("deny", "project_deny", "project", projectPath),
+    ],
+  });
+});
+
+test("项目配置发现不会越过 trustRoot", () => {
+  const root = createTemporaryDirectory();
+  const homeDir = join(root, "home");
+  const outerDir = join(root, "workspace");
+  const trustRoot = join(outerDir, "nested-repository");
+  const outerPath = join(outerDir, ".mo-code", "settings.json");
+  writeJson(outerPath, { permissions: { deny: ["outer_rule"] } });
+
+  assert.deepEqual(loadPermissionSettings({
+    cwd: join(trustRoot, "src"),
+    homeDir,
+    trustRoot,
+    projectTrusted: true,
+  }), { rules: [] });
+});
+
+test("未信任项目中的无效配置仍然抛错", () => {
+  const root = createTemporaryDirectory();
+  const homeDir = join(root, "home");
+  const projectDir = join(root, "project");
+  const projectPath = join(projectDir, ".mo-code", "settings.json");
+  writeRaw(projectPath, "{invalid-json");
+
+  assert.throws(
+    () => loadPermissionSettings({
+      cwd: projectDir,
+      homeDir,
+      trustRoot: projectDir,
+      projectTrusted: false,
+    }),
+    (error) => error instanceof Error
+      && error.message.includes(projectPath)
+      && error.message.includes("invalid JSON"),
+  );
+});
+
 test("只使用距离 cwd 最近的项目配置目录", () => {
   const root = createTemporaryDirectory();
   const homeDir = join(root, "home");
@@ -294,6 +453,33 @@ test("没有现有设置根时优先写入 Git 根目录", () => {
   });
 });
 
+test("嵌套 Git 仓库的持久授权不会写到外层项目", () => {
+  const root = createTemporaryDirectory();
+  const outerRoot = join(root, "outer");
+  const innerRoot = join(outerRoot, "packages", "inner");
+  const cwd = join(innerRoot, "src");
+  const outerLocalPath = join(outerRoot, ".mo-code", "settings.local.json");
+  const innerLocalPath = join(innerRoot, ".mo-code", "settings.local.json");
+  mkdirSync(join(outerRoot, ".git"), { recursive: true });
+  mkdirSync(join(innerRoot, ".git"), { recursive: true });
+  mkdirSync(cwd);
+  writeJson(outerLocalPath, {
+    permissions: { allow: ["read_file"] },
+  });
+
+  addLocalPermissionAllowRule({
+    cwd,
+    rule: "run_shell(pnpm test)",
+  });
+
+  assert.deepEqual(readJson(outerLocalPath), {
+    permissions: { allow: ["read_file"] },
+  });
+  assert.deepEqual(readJson(innerLocalPath), {
+    permissions: { allow: ["run_shell(pnpm test)"] },
+  });
+});
+
 test("没有设置根和 Git 根时回退到 cwd", () => {
   const root = createTemporaryDirectory();
   const cwd = join(root, "standalone");
@@ -357,6 +543,10 @@ function writeJson(path, value) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+function rule(behavior, raw, sourceScope, sourcePath) {
+  return { behavior, raw, sourceScope, sourcePath };
 }
 
 function writeRaw(path, contents) {

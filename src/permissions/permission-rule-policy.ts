@@ -215,6 +215,15 @@ export class PermissionRulePolicy implements PermissionPolicy {
   }
 }
 
+/** 在权限生效前编译所有规则，让被信任门禁过滤的规则也能及时暴露配置错误。 */
+export function validatePermissionRules(
+  rules: readonly PermissionRuleSetting[],
+  knownToolNames: Iterable<string>,
+): void {
+  const knownTools = new Set(knownToolNames);
+  for (const rule of rules) compileRule(rule, knownTools);
+}
+
 function compileRule(
   setting: PermissionRuleSetting,
   knownToolNames: ReadonlySet<string>,

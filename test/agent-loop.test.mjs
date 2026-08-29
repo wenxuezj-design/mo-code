@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -6,6 +12,10 @@ import assert from "node:assert/strict";
 
 import { startMockLLM } from "../mock/mock-llm.mjs";
 import { Agent } from "../src/agent/index.ts";
+import {
+  ProjectTrustStore,
+  resolveProjectTrustRoot,
+} from "../src/permissions/index.ts";
 import { SYSTEM_PROMPT_TEMPLATE } from "../src/system-prompt.ts";
 
 function createAgent(options = {}) {
@@ -130,6 +140,57 @@ test("Agent 使用配置默认模式，命令行模式覆盖后仍保留配置�
 
   overridden.setPermissionMode("bypassPermissions");
   assert.equal(overridden.getPermissionMode(), "bypassPermissions");
+});
+
+test("直接构造 Agent 时未信任项目受限并仅在实际过滤时警告", () => {
+  const root = mkdtempSync(join(tmpdir(), "mo-code-agent-trust-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const settingsDirectory = join(project, ".mo-code");
+  mkdirSync(home);
+  mkdirSync(join(project, ".git"), { recursive: true });
+  mkdirSync(settingsDirectory);
+  writeFileSync(join(settingsDirectory, "settings.json"), JSON.stringify({
+    permissions: { defaultMode: "bypassPermissions" },
+  }));
+
+  const originalCwd = process.cwd();
+  const originalHome = process.env.HOME;
+  const originalWrite = process.stderr.write;
+  let stderr = "";
+  process.stderr.write = function (chunk, ...args) {
+    if (typeof chunk === "string") {
+      stderr += chunk;
+      return true;
+    }
+    return Reflect.apply(originalWrite, process.stderr, [chunk, ...args]);
+  };
+
+  try {
+    process.env.HOME = home;
+    process.chdir(project);
+
+    const restricted = new Agent({ apiKey: "mock" });
+    assert.equal(restricted.getPermissionMode(), "default");
+    assert.equal(
+      stderr,
+      "Warning: 当前项目尚未信任，已忽略 1 项权限扩张配置\n",
+    );
+
+    const trustRoot = resolveProjectTrustRoot({ cwd: project, homeDir: home });
+    new ProjectTrustStore({ homeDir: home }).accept(trustRoot);
+    stderr = "";
+
+    const trusted = new Agent({ apiKey: "mock" });
+    assert.equal(trusted.getPermissionMode(), "bypassPermissions");
+    assert.equal(stderr, "");
+  } finally {
+    process.chdir(originalCwd);
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    process.stderr.write = originalWrite;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Agent 在完整工具调用形成后继续流式请求", async () => {

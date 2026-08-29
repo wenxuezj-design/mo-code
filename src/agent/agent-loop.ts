@@ -1,11 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { realpathSync } from "node:fs";
 
 import {
   addLocalPermissionAllowRule,
   PermissionGate,
   PermissionModePolicy,
   PermissionRulePolicy,
+  ProjectTrustStore,
   loadPermissionSettings,
+  resolveProjectTrustRoot,
+  validatePermissionRules,
   type LoadedPermissionSettings,
   type PermissionMode,
   type PermissionPrompter,
@@ -99,7 +103,12 @@ export class Agent {
     this.thinkingEnabled = options.thinking ?? false;
     this.cwd = process.cwd();
     const permissionSettings = options.permissionSettings
-      ?? loadPermissionSettings({ cwd: this.cwd });
+      ?? loadTrustedPermissionSettings(this.cwd);
+    const knownToolNames = toolDefinitions.map((tool) => tool.name);
+    validatePermissionRules([
+      ...permissionSettings.rules,
+      ...(permissionSettings.trustGated?.rules ?? []),
+    ], knownToolNames);
     this.permissionModePolicy = new PermissionModePolicy(
       options.permissionMode ?? permissionSettings.defaultMode ?? "default",
     );
@@ -108,7 +117,7 @@ export class Agent {
       policy: new PermissionRulePolicy(
         permissionSettings.rules,
         this.permissionModePolicy,
-        toolDefinitions.map((tool) => tool.name),
+        knownToolNames,
       ),
       prompter: options.permissionPrompter,
       sessionGrants: this.permissionSessionGrants,
@@ -310,4 +319,26 @@ export class Agent {
       }
     }
   }
+}
+
+function loadTrustedPermissionSettings(cwd: string): LoadedPermissionSettings {
+  const trustRoot = resolveProjectTrustRoot({ cwd });
+  const projectTrusted = new ProjectTrustStore().isTrusted(trustRoot);
+  const settings = loadPermissionSettings({
+    cwd: realpathSync(cwd),
+    trustRoot: trustRoot.path,
+    projectTrusted,
+  });
+  validatePermissionRules([
+    ...settings.rules,
+    ...(settings.trustGated?.rules ?? []),
+  ], toolDefinitions.map((tool) => tool.name));
+  if (!projectTrusted && settings.trustGated) {
+    const ignoredCount = settings.trustGated.rules.length
+      + (settings.trustGated.defaultMode === undefined ? 0 : 1);
+    process.stderr.write(
+      `Warning: 当前项目尚未信任，已忽略 ${ignoredCount} 项权限扩张配置\n`,
+    );
+  }
+  return settings;
 }

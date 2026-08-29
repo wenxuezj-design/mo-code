@@ -5,7 +5,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { PermissionMode } from "./types.ts";
 
@@ -26,11 +26,23 @@ export type LoadedPermissionSettings = {
   rules: PermissionRuleSetting[];
   defaultMode?: PermissionMode;
   defaultModeSource?: PermissionSettingSource;
+  /** 未信任项目时，被项目信任门禁暂时过滤的权限扩张配置。 */
+  trustGated?: TrustGatedPermissionSettings;
 };
 
-type LoadPermissionSettingsOptions = {
+export type TrustGatedPermissionSettings = {
+  rules: PermissionRuleSetting[];
+  defaultMode?: PermissionMode;
+  defaultModeSource?: PermissionSettingSource;
+};
+
+export type LoadPermissionSettingsOptions = {
   cwd: string;
   homeDir?: string;
+  /** 项目配置向父目录查找时不能越过的目录，且该目录本身仍在查找范围内。 */
+  trustRoot?: string;
+  /** 省略时保持原有的全量加载行为；false 时过滤项目侧权限扩张配置。 */
+  projectTrusted?: boolean;
 };
 
 type AddLocalPermissionAllowRuleOptions = {
@@ -59,7 +71,11 @@ export function loadPermissionSettings(
     },
   ];
 
-  const projectDir = findProjectSettingsDirectory(options.cwd, homeDir);
+  const projectDir = findProjectSettingsDirectory(
+    options.cwd,
+    homeDir,
+    options.trustRoot,
+  );
   if (projectDir) {
     sources.push(
       {
@@ -74,9 +90,26 @@ export function loadPermissionSettings(
   }
 
   const loaded: LoadedPermissionSettings = { rules: [] };
+  const trustGated: TrustGatedPermissionSettings = { rules: [] };
   for (const source of sources) {
     const settings = loadSettingsFile(source);
     if (!settings) continue;
+
+    if (options.projectTrusted === false && source.sourceScope !== "user") {
+      const allowedRules = settings.rules.filter(
+        (rule) => rule.behavior === "allow",
+      );
+      const restrictiveRules = settings.rules.filter(
+        (rule) => rule.behavior !== "allow",
+      );
+      loaded.rules.push(...restrictiveRules);
+      trustGated.rules.push(...allowedRules);
+      if (settings.defaultMode !== undefined) {
+        trustGated.defaultMode = settings.defaultMode;
+        trustGated.defaultModeSource = source;
+      }
+      continue;
+    }
 
     loaded.rules.push(...settings.rules);
     if (settings.defaultMode !== undefined) {
@@ -84,20 +117,26 @@ export function loadPermissionSettings(
       loaded.defaultModeSource = source;
     }
   }
+  if (
+    trustGated.rules.length > 0
+    || trustGated.defaultMode !== undefined
+  ) {
+    loaded.trustGated = trustGated;
+  }
   return loaded;
 }
 
 /**
  * 把确认界面生成的规则写入项目本地配置。
- * 优先复用最近的设置根；没有设置根时使用 Git 根目录，最后回退到 cwd。
+ * 优先复用信任根内最近的设置根；没有时写到最近 Git 根，非 Git 则写到 cwd。
  */
 export function addLocalPermissionAllowRule(
   options: AddLocalPermissionAllowRuleOptions,
 ): void {
   const cwd = resolve(options.cwd);
-  const settingsRoot = findExistingSettingsDirectory(cwd)
-    ?? findGitRoot(cwd)
-    ?? cwd;
+  const trustRoot = findGitRoot(cwd) ?? cwd;
+  const settingsRoot = findExistingSettingsDirectory(cwd, trustRoot)
+    ?? trustRoot;
   const settingsPath = join(settingsRoot, ".mo-code", "settings.local.json");
   const settings = readWritableSettings(settingsPath);
   const permissions = getWritablePermissions(settings, settingsPath);
@@ -115,8 +154,14 @@ export function addLocalPermissionAllowRule(
 function findProjectSettingsDirectory(
   cwd: string,
   homeDir: string,
+  trustRoot?: string,
 ): string | undefined {
   let current = resolve(cwd);
+  const boundary = trustRoot === undefined ? undefined : resolve(trustRoot);
+
+  if (boundary !== undefined && !isWithinDirectory(current, boundary)) {
+    return undefined;
+  }
 
   while (current !== homeDir) {
     const settingsDir = join(current, ".mo-code");
@@ -127,6 +172,7 @@ function findProjectSettingsDirectory(
       return current;
     }
 
+    if (current === boundary) return undefined;
     const parent = dirname(current);
     if (parent === current) return undefined;
     current = parent;
@@ -134,7 +180,20 @@ function findProjectSettingsDirectory(
   return undefined;
 }
 
-function findExistingSettingsDirectory(cwd: string): string | undefined {
+function isWithinDirectory(path: string, directory: string): boolean {
+  const relativePath = relative(directory, path);
+  return relativePath === ""
+    || (
+      relativePath !== ".."
+      && !relativePath.startsWith(`..${sep}`)
+      && !isAbsolute(relativePath)
+    );
+}
+
+function findExistingSettingsDirectory(
+  cwd: string,
+  boundary: string,
+): string | undefined {
   const userHome = resolve(homedir());
   return findAncestor(cwd, (directory) => {
     // ~/.mo-code/settings.json 是用户级配置，不能作为项目本地授权的写入位置。
@@ -142,7 +201,7 @@ function findExistingSettingsDirectory(cwd: string): string | undefined {
     const settingsDir = join(directory, ".mo-code");
     return existsSync(join(settingsDir, "settings.json"))
       || existsSync(join(settingsDir, "settings.local.json"));
-  });
+  }, boundary);
 }
 
 function findGitRoot(cwd: string): string | undefined {
@@ -152,10 +211,17 @@ function findGitRoot(cwd: string): string | undefined {
 function findAncestor(
   cwd: string,
   matches: (directory: string) => boolean,
+  boundary?: string,
 ): string | undefined {
   let current = resolve(cwd);
+  const stopDirectory = boundary === undefined ? undefined : resolve(boundary);
+  if (stopDirectory !== undefined && !isWithinDirectory(current, stopDirectory)) {
+    return undefined;
+  }
+
   while (true) {
     if (matches(current)) return current;
+    if (current === stopDirectory) return undefined;
     const parent = dirname(current);
     if (parent === current) return undefined;
     current = parent;

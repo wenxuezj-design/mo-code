@@ -1,12 +1,24 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 
 import { Agent } from "../agent/index.ts";
+import {
+  loadPermissionSettings,
+  ProjectTrustStore,
+  resolveProjectTrustRoot,
+  validatePermissionRules,
+  type LoadedPermissionSettings,
+} from "../permissions/index.ts";
+import { toolDefinitions } from "../tools/index.ts";
 import { HELP_TEXT, parseArgs, type ParsedArgs } from "./args.ts";
 import { runPrintTurn, runRepl } from "./conversation.ts";
 import {
   nonInteractivePermissionPrompter,
   TerminalPermissionPrompter,
 } from "./permission-prompter.ts";
+import {
+  ProjectTrustPromptInterruptedError,
+  promptForProjectTrust,
+} from "./project-trust-prompt.ts";
 import {
   confirmSessionDeletion,
   reportSkippedSessionFiles,
@@ -41,6 +53,18 @@ function reportCliError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`Error: ${message}\n`);
   process.exitCode = 1;
+}
+
+function reportAgentSetupError(
+  error: unknown,
+  terminal: ReadlineTerminalInput | undefined,
+): void {
+  terminal?.close();
+  if (error instanceof ProjectTrustPromptInterruptedError) {
+    process.exitCode = 130;
+    return;
+  }
+  reportCliError(error);
 }
 
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
@@ -91,11 +115,23 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   let session: SessionData;
   let terminal: ReadlineTerminalInput | undefined;
 
+  const getTerminal = () => {
+    terminal ??= new ReadlineTerminalInput();
+    return terminal;
+  };
+
   const createPermissionPrompter = () => {
     if (parsed.print) return nonInteractivePermissionPrompter;
 
-    terminal = new ReadlineTerminalInput();
-    return new TerminalPermissionPrompter(terminal);
+    return new TerminalPermissionPrompter(getTerminal());
+  };
+
+  const loadEffectivePermissionSettings = async () => {
+    return preparePermissionSettings({
+      cwd: process.cwd(),
+      interactive: !parsed.print,
+      getTerminal,
+    });
   };
 
   if (parsed.resume || parsed.continueSession) {
@@ -138,34 +174,36 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     }
 
     try {
+      const permissionSettings = await loadEffectivePermissionSettings();
       agent = new Agent({
         model: parsed.model ?? session.model,
         thinking: parsed.thinking,
         permissionMode: parsed.permissionMode,
         allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
         permissionPrompter: createPermissionPrompter(),
+        permissionSettings,
         permissionSessionGrants: session.permissionGrants,
       });
       agent.restoreMessages(session.messages);
       session.model = agent.getModel();
     } catch (error) {
-      terminal?.close();
-      reportCliError(error);
+      reportAgentSetupError(error, terminal);
       return;
     }
   } else {
     try {
+      const permissionSettings = await loadEffectivePermissionSettings();
       agent = new Agent({
         model: parsed.model,
         thinking: parsed.thinking,
         permissionMode: parsed.permissionMode,
         allowDangerouslySkipPermissions: parsed.allowDangerouslySkipPermissions,
         permissionPrompter: createPermissionPrompter(),
+        permissionSettings,
       });
       session = createSession(process.cwd(), agent.getModel());
     } catch (error) {
-      terminal?.close();
-      reportCliError(error);
+      reportAgentSetupError(error, terminal);
       return;
     }
   }
@@ -181,4 +219,63 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   } finally {
     terminal?.close();
   }
+}
+
+type PreparePermissionSettingsOptions = {
+  cwd: string;
+  interactive: boolean;
+  getTerminal: () => ReadlineTerminalInput;
+};
+
+async function preparePermissionSettings(
+  options: PreparePermissionSettingsOptions,
+): Promise<LoadedPermissionSettings> {
+  const trustRoot = resolveProjectTrustRoot({ cwd: options.cwd });
+  const trustStore = new ProjectTrustStore();
+  let projectTrusted = trustStore.isTrusted(trustRoot);
+  const canonicalCwd = realpathSync(options.cwd);
+  let settings = loadPermissionSettings({
+    cwd: canonicalCwd,
+    trustRoot: trustRoot.path,
+    projectTrusted,
+  });
+  validateLoadedPermissionRules(settings);
+
+  if (!projectTrusted && options.interactive) {
+    const accepted = await promptForProjectTrust(options.getTerminal(), {
+      trustRoot: trustRoot.path,
+      allowRules: settings.trustGated?.rules.map((rule) => rule.raw) ?? [],
+      defaultMode: settings.trustGated?.defaultMode,
+    });
+    if (accepted) {
+      const trustedSettings = loadPermissionSettings({
+        cwd: canonicalCwd,
+        trustRoot: trustRoot.path,
+        projectTrusted: true,
+      });
+      validateLoadedPermissionRules(trustedSettings);
+      trustStore.accept(trustRoot);
+      projectTrusted = true;
+      settings = trustedSettings;
+    }
+  }
+
+  if (!projectTrusted && !options.interactive && settings.trustGated) {
+    const ignoredCount = settings.trustGated.rules.length
+      + (settings.trustGated.defaultMode === undefined ? 0 : 1);
+    process.stderr.write(
+      `Warning: 当前项目尚未信任，已忽略 ${ignoredCount} 项权限扩张配置\n`,
+    );
+  }
+
+  return settings;
+}
+
+function validateLoadedPermissionRules(
+  settings: LoadedPermissionSettings,
+): void {
+  validatePermissionRules([
+    ...settings.rules,
+    ...(settings.trustGated?.rules ?? []),
+  ], toolDefinitions.map((tool) => tool.name));
 }
